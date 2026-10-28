@@ -18,7 +18,6 @@ import session
 
 CONFIG_FILE = Path(__file__).with_name("robot.json")
 HITS_FILE = Path(__file__).with_name("hits.json")
-LEGACY_WATCH_FILE = Path(__file__).with_name("watch.json")
 MIN_INTERVAL_MIN = 3  # keep the load on the school's server low
 REUSE_CACHE_S = 60  # a search that ran in the last minute is fresh enough for the robot
 DEFAULT_MEMBERS = {"1": 2, "2": 0, "3": 0, "4": 0}  # head count per member type; most venues need >= 2
@@ -36,16 +35,7 @@ def load_config() -> dict:
     with _file_lock:
         if CONFIG_FILE.exists():
             return json.loads(CONFIG_FILE.read_text(encoding="utf-8"))
-        cfg = {"interval_min": 5, "filters": [], "members": dict(DEFAULT_MEMBERS)}
-        # Carry over the single filter from the old watch.json.
-        if LEGACY_WATCH_FILE.exists():
-            w = json.loads(LEGACY_WATCH_FILE.read_text(encoding="utf-8"))
-            cfg["interval_min"] = w.get("interval_min", 5)
-            if w.get("slots"):
-                cfg["filters"].append({"id": _new_id(), "name": "我的濾網", "enabled": bool(w.get("enabled")),
-                                       "venues": w.get("venues", []), "slots": w["slots"]})
-        CONFIG_FILE.write_text(json.dumps(cfg, ensure_ascii=False, indent=2), encoding="utf-8")
-        return cfg
+    return {"interval_min": 5, "filters": [], "members": dict(DEFAULT_MEMBERS)}
 
 
 def save_config(cfg: dict) -> None:
@@ -79,20 +69,11 @@ def is_active(f: dict) -> bool:
 
 def load_hits() -> dict:
     with _file_lock:
-        hits = json.loads(HITS_FILE.read_text(encoding="utf-8")) if HITS_FILE.exists() else {}
-    # Older files had one hit per filter ("filter|venue|date|hour"); fold them together.
-    if any("filter" in h for h in hits.values()):
-        merged = {}
-        for h in hits.values():
-            key = f"{h['venue']}|{h['date']}|{h['hour']}"
-            fids = h.get("filters") or [h.pop("filter")]
-            h.pop("filter", None)
-            if key in merged:
-                merged[key]["filters"] = sorted(set(merged[key]["filters"]) | set(fids))
-            else:
-                merged[key] = {**h, "filters": fids, "want": h.get("want", 1)}
-        hits = merged
-    return hits
+        return json.loads(HITS_FILE.read_text(encoding="utf-8")) if HITS_FILE.exists() else {}
+
+
+def find_hit(hits: dict, hit_id: str) -> dict | None:
+    return next((h for h in hits.values() if h["id"] == hit_id), None)
 
 
 def save_hits(hits: dict) -> None:

@@ -13,7 +13,6 @@ from urllib.parse import urlencode
 
 import session
 
-SNAPSHOT_DIR = Path(__file__).with_name("snapshots")
 BOOK_WINDOW = (3, 7)  # bookable days ahead, inclusive
 
 # Opening hours of 綜合體育館 (start hours that can be booked), by weekday.
@@ -28,11 +27,11 @@ OPEN_HOURS[6] = list(range(9, 18))
 #     <div class="S" s="N"><div class="SText">13 ~ 14  not bookable (event, closed, already rented)
 #     <div class="N ..." style="height: calc( ... * 3 - 2px );"><div class="EventName" title="請至現場租借">
 #                                                      an event label; it covers this and the next 2 hours
-_DAY_RE = re.compile(r'<div class="D" d="(\d{4}-\d{2}-\d{2})"')
-_SLOT_RE = re.compile(
+DAY_RE = re.compile(r'<div class="D" d="(\d{4}-\d{2}-\d{2})"')
+SLOT_RE = re.compile(
     r'<(a|div)\b([^>]*\bclass="S"[^>]*)>\s*<div class="SText">\s*(\d{1,2})\s*~(.*?)(?=<(?:a|div)\b[^>]*\bclass="S"|\Z)', re.S
 )
-_EVENT_RE = re.compile(r'\* (\d+) - 2px \);"><div class="EventName"[^>]*title="([^"]*)"')
+EVENT_RE = re.compile(r'\* (\d+) - 2px \);"><div class="EventName"[^>]*title="([^"]*)"')
 ONSITE_LABEL = "現場租借"  # "請至現場租借": free, but only bookable at the counter
 _COURT_RE = re.compile(r'<a [^>]*\bv="(\d+)"[^>]*class="VSMenu[^"]*"[^>]*title="([^"]*)"')
 _SK_RE = re.compile(r'<textarea name="SK"[^>]*>([^<]*)</textarea>')
@@ -41,12 +40,12 @@ _SK_RE = re.compile(r'<textarea name="SK"[^>]*>([^<]*)</textarea>')
 def parse_schedule(html: str) -> dict[tuple[str, int], str]:
     """Return {(iso_date, start_hour): "open" | "onsite" | "full"} for every slot in a schedule fragment."""
     out = {}
-    parts = _DAY_RE.split(html)
+    parts = DAY_RE.split(html)
     for day, body in zip(parts[1::2], parts[2::2]):
         covered_until, onsite = -1, False
-        for tag, attrs, hour_s, inner in _SLOT_RE.findall(body):
+        for tag, attrs, hour_s, inner in SLOT_RE.findall(body):
             hour = int(hour_s)
-            event = _EVENT_RE.search(inner)
+            event = EVENT_RE.search(inner)
             if event:
                 covered_until, onsite = hour + int(event.group(1)), ONSITE_LABEL in event.group(2)
             if tag == "a" and 's="Y"' in attrs and 'r="Y"' not in attrs:
@@ -67,6 +66,31 @@ def parse_order_page(html: str) -> tuple[list[tuple[str, str]], str]:
 
 def _epoch(d: date) -> int:
     return int(datetime.combine(d, datetime.min.time()).timestamp())
+
+
+def open_venue(venue: str) -> tuple[list[tuple[str, str]], str, str]:
+    """Select `venue` in the server-side session. Returns (courts, SK token, order page HTML); the order page
+    already shows the first court's schedule. Callers must hold session.SITE_LOCK."""
+    # ?Add= selects the venue in the server-side session, then /order/A/ shows its first court.
+    session.fetch(f"/order/?Add={venue}")
+    time.sleep(1)
+    page = session.fetch("/order/A/")
+    session.SNAPSHOT_DIR.mkdir(exist_ok=True)
+    (session.SNAPSHOT_DIR / f"{venue.replace(':', '_')}_order.html").write_text(page, encoding="utf-8")
+    courts, sk = parse_order_page(page)
+    if not courts:
+        raise ValueError("訂場頁面找不到場地面號，網站格式可能改了（頁面已存到 snapshots/）")
+    return courts, sk, page
+
+
+def fetch_schedule(court_id: str, sk: str, start: date, end: date) -> str:
+    """Schedule markup of one court of the venue opened by open_venue(), from `start` to `end`."""
+    form = urlencode({
+        "VenuesSN": court_id, "OrderSource": "Order", "BookingType": "", "Booking": "Y",
+        "OrderSN": "", "OrderType": "A", "SDMK": _epoch(start), "EDMK": _epoch(end),
+        "ViewStatus": "undefined",
+    }) + "&EnV=" + sk  # SK is already URL-encoded in the page, send it as-is like the site's JS
+    return json.loads(session.fetch("/__/f/Schedule.php", form)).get("ScheduleList", "")
 
 
 # Cache of the last full walk per venue (all courts, today .. BOOK_WINDOW[1]), shared by search and
@@ -135,30 +159,15 @@ def scan_venue(venue: str, progress=None) -> list[tuple[str, dict]]:
     """Return [(court_name, {(iso_date, hour): status}), ...] for every court of one venue,
     covering today through BOOK_WINDOW[1] days ahead."""
     with session.SITE_LOCK:
-        # ?Add= selects the venue in the server-side session, then /order/A/ shows its first court.
-        session.fetch(f"/order/?Add={venue}")
-        time.sleep(1)
-        page = session.fetch("/order/A/")
-        SNAPSHOT_DIR.mkdir(exist_ok=True)
-        (SNAPSHOT_DIR / f"{venue.replace(':', '_')}_order.html").write_text(page, encoding="utf-8")
-        courts, sk = parse_order_page(page)
-        if not courts:
-            raise ValueError("訂場頁面找不到場地面號，網站格式可能改了（頁面已存到 snapshots/）")
-
+        courts, sk, page = open_venue(venue)
         start = date.today()
         result = [(courts[0][1], parse_schedule(page))]
         if progress:
             progress(1, len(courts))
         for i, (court_id, court_name) in enumerate(courts[1:], start=2):
             time.sleep(1.2)
-            form = urlencode({
-                "VenuesSN": court_id, "OrderSource": "Order", "BookingType": "", "Booking": "Y",
-                "OrderSN": "", "OrderType": "A",
-                "SDMK": _epoch(start), "EDMK": _epoch(start + timedelta(days=BOOK_WINDOW[1])),
-                "ViewStatus": "undefined",
-            }) + "&EnV=" + sk  # SK is already URL-encoded in the page, send it as-is like the site's JS
-            data = json.loads(session.fetch("/__/f/Schedule.php", form))
-            result.append((court_name, parse_schedule(data.get("ScheduleList", ""))))
+            html = fetch_schedule(court_id, sk, start, start + timedelta(days=BOOK_WINDOW[1]))
+            result.append((court_name, parse_schedule(html)))
             if progress:
                 progress(i, len(courts))
         return result

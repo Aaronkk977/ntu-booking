@@ -6,7 +6,6 @@ Run:  python server.py   then open http://127.0.0.1:8765
 import json
 import os
 import threading
-import uuid
 import webbrowser
 from datetime import date, datetime, timedelta
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -22,7 +21,6 @@ import session
 HOST, PORT = "127.0.0.1", int(os.environ.get("PORT", 8765))
 ROOT = Path(__file__).parent
 STATIC = ROOT / "static"
-TASKS_FILE = ROOT / "tasks.json"
 
 # Venue IDs come from the "常租場地" links on rent.pe.ntu.edu.tw (/order/?Add=A:<id>).
 VENUES = [
@@ -81,14 +79,10 @@ _search_job = {"running": False, "venues": [], "venue": None, "step": 0, "done":
 _search_results: dict[str, dict] = {}  # latest per-venue result, from a manual search or a robot round
 
 
-def _store_result(venue: str, result: dict) -> None:
-    _search_results[venue] = result
-
-
 _book_job = {"running": False, "hit": None, "message": "", "error": None}
 BOOKING_BUSY = "Edge 預訂視窗開著時無法讀取網站，請先完成預訂並關閉視窗"
 
-ROBOT = robot.Robot(log, VENUE_NAMES, VENUE_IDS_ORDERED, on_result=_store_result,
+ROBOT = robot.Robot(log, VENUE_NAMES, VENUE_IDS_ORDERED, on_result=_search_results.__setitem__,
                     is_paused=lambda: _book_job["running"])
 
 
@@ -106,9 +100,9 @@ def _run_book(hit: dict, members: dict, quantity: int) -> None:
         _book_job.update(error=str(e))
         log("warn", f"預訂失敗：{label} {e}")
         hits = robot.load_hits()
-        for h in hits.values():
-            if h["id"] == hit["id"]:
-                h.update(status="gone", gone_at=datetime.now().isoformat(timespec="seconds"))
+        gone = robot.find_hit(hits, hit["id"])
+        if gone:
+            gone.update(status="gone", gone_at=datetime.now().isoformat(timespec="seconds"))
         robot.save_hits(hits)
     except session.NotLoggedIn as e:
         _book_job.update(error=f"{e}，請先按「登入網站」")
@@ -136,7 +130,7 @@ def _run_search(venues: list[str], force: bool) -> None:
         for step, venue in enumerate(venues, start=1):
             _search_job.update(venue=venue, step=step, done=0, total=0)
             result = scanner.search(venue, progress, max_age_s=0 if force else scanner.CACHE_MAX_AGE_S)
-            _store_result(venue, result)
+            _search_results[venue] = result
             n_open = sum(bool(c["open"]) for c in result["cells"].values())
             n_onsite = sum(bool(c["onsite"]) for c in result["cells"].values())
             src = f"（使用 {result['generated'][11:16]} 的快取）" if result["from_cache"] else ""
@@ -147,49 +141,6 @@ def _run_search(venues: list[str], force: bool) -> None:
         log("error", f"搜尋失敗：{e.__class__.__name__}: {e}")
     finally:
         _search_job.update(running=False)
-
-
-def load_tasks() -> list[dict]:
-    if not TASKS_FILE.exists():
-        return []
-    return json.loads(TASKS_FILE.read_text(encoding="utf-8"))
-
-
-def save_tasks(tasks: list[dict]) -> None:
-    TASKS_FILE.write_text(json.dumps(tasks, ensure_ascii=False, indent=2), encoding="utf-8")
-
-
-def validate_task(body: dict) -> tuple[dict | None, str | None]:
-    venue = body.get("venue")
-    if venue not in VENUE_IDS:
-        return None, "請選擇場地"
-    try:
-        date = datetime.strptime(body.get("date", ""), "%Y-%m-%d").date()
-    except ValueError:
-        return None, "日期格式錯誤"
-    try:
-        start, hours = int(body.get("start_hour")), int(body.get("hours"))
-    except (TypeError, ValueError):
-        return None, "時段格式錯誤"
-    if not (6 <= start <= 21) or not (1 <= hours <= 4) or start + hours > 22:
-        return None, "時段需介於 06:00 到 22:00，最多 4 小時"
-    try:
-        open_at = datetime.strptime(body.get("open_at", ""), "%Y-%m-%dT%H:%M")
-    except ValueError:
-        return None, "開搶時間格式錯誤"
-    if open_at.date() >= date:
-        return None, "開搶時間必須早於租借日"
-    return {
-        "id": uuid.uuid4().hex[:8],
-        "venue": venue,
-        "date": date.isoformat(),
-        "start_hour": start,
-        "hours": hours,
-        "open_at": open_at.strftime("%Y-%m-%dT%H:%M"),
-        "note": str(body.get("note", ""))[:100],
-        "status": "pending",
-        "created": datetime.now().strftime("%Y-%m-%d %H:%M"),
-    }, None
 
 
 class Handler(BaseHTTPRequestHandler):
@@ -248,9 +199,6 @@ class Handler(BaseHTTPRequestHandler):
             return self._json({"username": saved[0] if saved else "", "has_password": bool(saved)})
         if path == "/api/venues":
             return self._json(VENUES)
-        if path == "/api/tasks":
-            with _lock:
-                return self._json(load_tasks())
         if path == "/api/logs":
             with _lock:
                 return self._json(list(_logs))
@@ -287,26 +235,13 @@ class Handler(BaseHTTPRequestHandler):
             username = str(body.get("username", "")).strip()
             password = body.get("password") or ""
             if not password:  # keep the stored password when only the username changes
-                try:
-                    saved = credentials.load()
-                except OSError:
-                    saved = None
+                saved = credentials.load_or_none()
                 password = saved[1] if saved else ""
             if not username or not password:
                 return self._json({"error": "請輸入帳號和密碼"}, 400)
             credentials.save(username, password)
             log("info", f"已儲存帳號 {username}")
             return self._json({"ok": True})
-        if path == "/api/tasks":
-            task, err = validate_task(body)
-            if err:
-                return self._json({"error": err}, 400)
-            with _lock:
-                tasks = load_tasks()
-                tasks.append(task)
-                save_tasks(tasks)
-            log("info", f"新增預約任務 {task['id']}：{task['date']} {task['start_hour']:02d}:00 起 {task['hours']} 小時")
-            return self._json(task)
         if path == "/api/robot/settings":
             cfg = robot.load_config()
             try:
@@ -325,7 +260,7 @@ class Handler(BaseHTTPRequestHandler):
             if _book_job["running"]:
                 return self._json({"error": "已經有一筆預訂視窗開著，請先完成或關閉它"}, 409)
             hit_id = path.split("/")[4]
-            hit = next((h for h in robot.load_hits().values() if h["id"] == hit_id), None)
+            hit = robot.find_hit(robot.load_hits(), hit_id)
             if hit is None or hit["status"] != "available":
                 return self._json({"error": "這筆已經不能訂了"}, 404)
             if not session.has_session():
@@ -338,7 +273,7 @@ class Handler(BaseHTTPRequestHandler):
         if path.startswith("/api/robot/hits/") and path.endswith("/want"):
             hit_id = path.split("/")[4]
             hits = robot.load_hits()
-            hit = next((h for h in hits.values() if h["id"] == hit_id), None)
+            hit = robot.find_hit(hits, hit_id)
             if hit is None:
                 return self._json({"error": "找不到這筆"}, 404)
             try:
@@ -379,7 +314,7 @@ class Handler(BaseHTTPRequestHandler):
         if path.startswith("/api/robot/hits/") and path.endswith("/dismiss"):
             hit_id = path.split("/")[4]
             hits = robot.load_hits()
-            hit = next((h for h in hits.values() if h["id"] == hit_id), None)
+            hit = robot.find_hit(hits, hit_id)
             if hit is None:
                 return self._json({"error": "找不到這筆"}, 404)
             hit["status"] = "dismissed"
@@ -419,20 +354,13 @@ class Handler(BaseHTTPRequestHandler):
         if path == "/api/session/login":
             if _login["in_progress"]:
                 return self._json({"error": "登入視窗已開啟"}, 409)
-            try:
-                saved = credentials.load()
-            except OSError:
-                saved = None
+            saved = credentials.load_or_none()
             if not saved:
-                return self._json({"error": "請先在帳號設定儲存帳號密碼"}, 400)
+                return self._json({"error": "請先在設定儲存帳號密碼"}, 400)
             _login["in_progress"] = True
             threading.Thread(target=_run_login, args=saved, daemon=True).start()
             log("info", "已開啟 Edge 登入視窗，請輸入確認碼後按登入（5 分鐘內）")
             return self._json({"ok": True})
-        if path.startswith("/api/tasks/") and path.endswith("/run"):
-            task_id = path.split("/")[3]
-            log("warn", f"任務 {task_id}：自動訂場尚未實作，需要先登入檢查訂場頁面結構")
-            return self._json({"error": "自動訂場功能尚未完成"}, 501)
         return self.send_error(404)
 
     def do_DELETE(self):
@@ -460,16 +388,6 @@ class Handler(BaseHTTPRequestHandler):
         if path == "/api/session":
             session.clear()
             log("info", "已清除登入狀態")
-            return self._json({"ok": True})
-        if path.startswith("/api/tasks/"):
-            task_id = path.rsplit("/", 1)[1]
-            with _lock:
-                tasks = load_tasks()
-                remaining = [t for t in tasks if t["id"] != task_id]
-                save_tasks(remaining)
-            if len(remaining) == len(tasks):
-                return self._json({"error": "找不到任務"}, 404)
-            log("info", f"刪除預約任務 {task_id}")
             return self._json({"ok": True})
         return self.send_error(404)
 

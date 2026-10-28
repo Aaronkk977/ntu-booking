@@ -62,5 +62,13 @@ def load() -> tuple[str, str] | None:
     return data["username"], password
 
 
+def load_or_none() -> tuple[str, str] | None:
+    """Like load(), but None when the saved password can't be decrypted (other machine or Windows user)."""
+    try:
+        return load()
+    except OSError:
+        return None
+
+
 def delete() -> None:
     CRED_FILE.unlink(missing_ok=True)

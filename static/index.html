@@ -40,8 +40,6 @@
   }
   header h1 { font-size: 17px; margin: 0; font-weight: 700; letter-spacing: .5px; }
   header .spacer { flex: 1; }
-  .clock { font-family: var(--mono); font-size: 15px; font-variant-numeric: tabular-nums; }
-  .clock small { color: var(--muted); font-family: var(--font); margin-right: 6px; }
   .pill { display: inline-flex; align-items: center; gap: 6px; padding: 3px 10px; border-radius: 999px; font-size: 12px; font-weight: 600; }
   .pill::before { content: ""; width: 7px; height: 7px; border-radius: 50%; background: currentColor; }
   .pill.ok { background: var(--ok-soft); color: var(--ok); }
@@ -80,24 +78,6 @@
   .actions { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
   .hint { font-size: 12.5px; color: var(--muted); margin: 6px 0 0; }
 
-  .venues { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin-bottom: 12px; }
-  .venue { position: relative; }
-  .venue input { position: absolute; opacity: 0; pointer-events: none; }
-  .venue span { display: block; border: 1px solid var(--line); border-radius: 8px; padding: 8px 10px; cursor: pointer; }
-  .venue b { display: block; font-size: 13.5px; }
-  .venue em { font-style: normal; font-size: 12px; color: var(--muted); }
-  .venue input:checked + span { border-color: var(--accent); background: var(--accent-soft); }
-  .venue input:focus-visible + span { box-shadow: 0 0 0 3px var(--accent-soft); }
-
-  .summary { background: var(--bg); border-radius: 8px; padding: 10px 12px; font-size: 13px; margin: 4px 0 14px; }
-  .summary b { color: var(--accent); }
-
-  .tasks { display: grid; gap: 10px; }
-  .task { display: grid; grid-template-columns: 1fr auto; gap: 6px 16px; border: 1px solid var(--line); border-radius: 9px; padding: 12px 14px; }
-  .task .title { font-weight: 700; font-size: 14.5px; }
-  .task .meta { color: var(--muted); font-size: 12.5px; }
-  .task .when { font-family: var(--mono); font-variant-numeric: tabular-nums; font-size: 13px; }
-  .task .side { display: flex; flex-direction: column; align-items: flex-end; gap: 8px; grid-row: span 2; }
   .empty { color: var(--muted); text-align: center; padding: 28px 0; border: 1px dashed var(--line); border-radius: 9px; }
 
   .logs { font-family: var(--mono); font-size: 12.5px; max-height: 280px; overflow-y: auto; background: var(--bg); border-radius: 8px; padding: 8px 10px; }
@@ -145,21 +125,17 @@
   table.week tbody th { width: 70px; text-align: right; padding-right: 8px; font-family: var(--mono); font-weight: 400; color: var(--muted); }
   table.week td { height: 26px; border-radius: 5px; background: var(--bg); border: 1px solid var(--line); cursor: pointer; text-align: center; font-size: 11.5px; font-weight: 600; }
   table.week td:hover { border-color: var(--accent); }
+  table.week td:focus-visible, table.week th:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
   table.week td.sel { background: var(--accent-soft); border-color: var(--accent); color: var(--accent); }
   table.week td.closed { cursor: not-allowed; border-color: transparent;
     background: repeating-linear-gradient(135deg, transparent 0 5px, var(--line) 5px 6px); }
   table.week td.r-open { background: var(--ok); border-color: var(--ok); color: #fff; }
   table.week td.r-full { color: var(--muted); }
-  table.week td.r-unknown { color: var(--warn); }
   .legend { display: flex; flex-wrap: wrap; gap: 14px; font-size: 12px; color: var(--muted); margin-top: 10px; }
   .legend i { display: inline-block; width: 14px; height: 14px; border-radius: 4px; vertical-align: -2px; margin-right: 5px; border: 1px solid var(--line); background: var(--bg); }
   .legend i.sel { background: var(--accent-soft); border-color: var(--accent); }
   .legend i.open { background: var(--ok); border-color: var(--ok); }
   .legend i.closed { background: repeating-linear-gradient(135deg, transparent 0 3px, var(--line) 3px 4px); }
-
-  .found { display: grid; gap: 8px; margin-top: 14px; }
-  .found .item { display: flex; align-items: center; gap: 12px; padding: 8px 12px; border-radius: 8px; background: var(--ok-soft); color: var(--ok); font-weight: 600; }
-  .found .item button { margin-left: auto; }
 
   .tabs { display: flex; gap: 4px; border-bottom: 1px solid var(--line); margin: -4px 0 12px; }
   .tab { border: none; border-bottom: 2px solid transparent; border-radius: 0; background: none; padding: 6px 14px 8px; font-weight: 600; color: var(--muted); }
@@ -230,11 +206,18 @@
   .ftab .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--line); }
   .ftab .dot.on { background: var(--ok); }
 
-  .members { margin: 0 0 10px; }
+  .members-line { margin: 0 0 10px; display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
   .member { display: inline-flex; align-items: center; gap: 4px; font-size: 13px; }
   .member input { width: 56px; padding: 3px 6px; }
   .book-bar { padding: 8px 12px; border-radius: 8px; margin-bottom: 8px; font-size: 13px; background: var(--accent-soft); color: var(--accent); font-weight: 600; }
   .book-bar.err { background: var(--err-soft); color: var(--err); }
+
+  dialog.settings { width: min(460px, calc(100% - 32px)); padding: 18px; border: 1px solid var(--line); border-radius: var(--radius);
+    background: var(--card); color: var(--text); box-shadow: 0 12px 40px rgba(0,0,0,.25); }
+  dialog.settings::backdrop { background: rgba(0,0,0,.4); }
+  dialog.settings h2 { font-size: 15px; margin: 0 0 14px; display: flex; align-items: center; }
+  dialog.settings h2 button { margin-left: auto; }
+  dialog.settings h3.sub { margin-top: 22px; }
 
   .toast { position: fixed; bottom: 20px; left: 50%; transform: translateX(-50%) translateY(20px); opacity: 0; transition: .2s;
     background: var(--text); color: var(--bg); padding: 9px 16px; border-radius: 8px; pointer-events: none; z-index: 10; max-width: calc(100% - 32px); }
@@ -245,12 +228,12 @@
 <body>
 <header>
   <h1>臺大場地預約控制台</h1>
+  <span class="spacer"></span>
   <span id="acctPill" class="pill warn">尚未設定帳號</span>
   <span id="sessionPill" class="pill warn">網站未登入</span>
-  <button type="button" class="small" id="loginBtn">登入網站</button>
+  <button type="button" class="small primary" id="loginBtn">登入網站</button>
   <button type="button" class="small ghost" id="logoutBtn">清除登入</button>
-  <span class="spacer"></span>
-  <span class="clock"><small>現在時間</small><span id="clock">--</span></span>
+  <button type="button" class="small" data-open-settings>設定</button>
 </header>
 
 <main>
@@ -302,10 +285,7 @@
 
     <h3 class="sub">自動加入的清單 <span class="count" id="hitCount"></span>
       <button type="button" class="small ghost right" id="clearGone">清除已失效</button></h3>
-    <div class="toolbar members">
-      <span class="label">預訂人數（按「立即預訂」時自動填入，羽球等場地至少 2 人）</span>
-      <span class="group" id="members"></span>
-    </div>
+    <p class="hint members-line" id="membersLine"></p>
     <div class="book-bar" id="bookBar" hidden></div>
     <div class="hits" id="hits"></div>
 
@@ -337,7 +317,8 @@
     <div class="empty" id="filterEmpty" hidden>還沒有濾網，按「＋ 新增濾網」建立一組場地和時段</div>
     </div>
     <div class="tabpanel" id="panel-heat" hidden>
-      <p class="hint tab-hint">每格的百分比＝過去這個時段有開放線上租借時，被訂走的比例；顏色越深越難訂。點格子可直接加入或移出<b id="heatFilterName">目前選取的濾網</b>的時段。</p>
+      <p class="hint tab-hint">每格的百分比＝過去這個時段有開放線上租借時，被訂走的比例；顏色越深越難訂。</p>
+      <p class="hint tab-hint" id="heatFilterHint"></p>
       <div class="toolbar">
         <div class="group"><span class="label">場地</span><select id="heatVenue" class="compact"></select></div>
         <div class="group"><span class="label">統計起始日</span><input id="heatSince" type="date" class="compact"></div>
@@ -355,46 +336,6 @@
 
   <div class="col">
     <section class="card">
-      <h2>帳號設定</h2>
-      <form id="credForm" autocomplete="off">
-        <label class="field"><span>帳號（電子信箱）</span>
-          <input id="username" type="text" placeholder="例：b12345678@ntu.edu.tw">
-        </label>
-        <label class="field"><span>密碼</span>
-          <div class="pw-wrap">
-            <input id="password" type="password" placeholder="請輸入密碼">
-            <button type="button" class="ghost" id="togglePw">顯示</button>
-          </div>
-        </label>
-        <div class="actions">
-          <button type="submit" class="primary">儲存</button>
-          <button type="button" class="danger" id="deleteCred">刪除已存資料</button>
-        </div>
-        <p class="hint">密碼以 Windows DPAPI 加密存在本機，只有這台電腦的這個 Windows 帳號能解開。登入時的確認碼仍需手動輸入。</p>
-      </form>
-    </section>
-
-    <section class="card" hidden><!-- 新增預約：暫時收起，程式碼保留給之後的自動訂場 -->
-      <h2>新增預約</h2>
-      <form id="taskForm">
-        <div class="venues" id="venues"></div>
-        <div class="row">
-          <label class="field"><span>租借日期</span><input id="date" type="date" required></label>
-          <label class="field"><span>開始時間</span><select id="startHour"></select></label>
-        </div>
-        <div class="row">
-          <label class="field"><span>使用時數</span>
-            <select id="hours"><option value="1">1 小時</option><option value="2" selected>2 小時</option><option value="3">3 小時</option><option value="4">4 小時</option></select>
-          </label>
-          <label class="field"><span>開搶時間</span><input id="openAt" type="datetime-local" required></label>
-        </div>
-        <label class="field"><span>備註（選填）</span><input id="note" type="text" maxlength="100" placeholder="例：社團練球"></label>
-        <div class="summary" id="summary"></div>
-        <div class="actions"><button type="submit" class="primary">加入預約清單</button></div>
-      </form>
-    </section>
-
-    <section class="card">
       <h2>租借規定重點</h2>
       <ul class="rules">
         <li>球類場地須於租借日<b>前 7 天至前 3 天</b>提出申請。</li>
@@ -407,11 +348,6 @@
   </div>
 
   <div class="col">
-    <section class="card" hidden><!-- 預約清單：暫時收起 -->
-      <h2>預約清單 <span class="count" id="taskCount"></span></h2>
-      <div class="tasks" id="tasks"></div>
-    </section>
-
     <section class="card">
       <h2>執行紀錄 <button class="ghost right" id="clearLogView" type="button">清除畫面</button></h2>
       <div class="logs" id="logs"></div>
@@ -419,13 +355,35 @@
   </div>
 </main>
 
+<dialog class="settings" id="settings">
+  <h2>設定 <button type="button" class="small ghost" id="closeSettings" aria-label="關閉">✕</button></h2>
+  <form id="credForm" autocomplete="off">
+    <label class="field"><span>租借系統帳號（電子信箱）</span>
+      <input id="username" type="text" placeholder="例：b12345678@ntu.edu.tw">
+    </label>
+    <label class="field"><span>密碼</span>
+      <div class="pw-wrap">
+        <input id="password" type="password" placeholder="請輸入密碼">
+        <button type="button" class="ghost" id="togglePw">顯示</button>
+      </div>
+    </label>
+    <div class="actions">
+      <button type="submit" class="primary">儲存帳號</button>
+      <button type="button" class="danger" id="deleteCred">刪除已存資料</button>
+    </div>
+    <p class="hint">密碼以 Windows DPAPI 加密存在本機，只有這台電腦的這個 Windows 帳號能解開。存好後按上方「登入網站」，在跳出的 Edge 視窗輸入確認碼。</p>
+  </form>
+  <h3 class="sub">預訂人數</h3>
+  <div class="group" id="members"></div>
+  <p class="hint">按「立即預訂」時自動填入學校的表單；羽球等場地至少 2 人。改了馬上儲存。</p>
+</dialog>
+
 <div class="toast" id="toast"></div>
 
 <script>
 const $ = (id) => document.getElementById(id);
 const WEEK = ["日", "一", "二", "三", "四", "五", "六"];
 let venues = [];
-let tasks = [];
 let logCutoff = 0;
 
 const pad = (n) => String(n).padStart(2, "0");
@@ -453,13 +411,6 @@ async function api(path, opts = {}) {
   return data;
 }
 
-/* ---------- clock ---------- */
-function tick() {
-  const n = new Date();
-  $("clock").textContent = `${ymd(n)} ${pad(n.getHours())}:${pad(n.getMinutes())}:${pad(n.getSeconds())}`;
-  renderCountdowns();
-}
-
 /* ---------- credentials ---------- */
 async function loadCred() {
   const c = await api("/api/credentials");
@@ -470,7 +421,14 @@ async function loadCred() {
   if (c.error) { pill.className = "pill err"; pill.textContent = c.error; }
   else if (c.has_password) { pill.className = "pill ok"; pill.textContent = `帳號：${c.username}`; }
   else { pill.className = "pill warn"; pill.textContent = "尚未設定帳號"; }
+  return c;
 }
+
+/* ---------- settings dialog ---------- */
+function openSettings() { loadCred(); $("settings").showModal(); }
+document.addEventListener("click", (e) => { if (e.target.closest("[data-open-settings]")) openSettings(); });
+$("closeSettings").onclick = () => $("settings").close();
+$("settings").addEventListener("click", (e) => { if (e.target === $("settings")) $("settings").close(); }); // backdrop
 
 $("togglePw").onclick = () => {
   const p = $("password");
@@ -496,118 +454,25 @@ $("deleteCred").onclick = guard(async () => {
   refreshLogs();
 });
 
-/* ---------- new task form ---------- */
-function renderVenues() {
-  $("venues").innerHTML = venues.map((v, i) => `
-    <label class="venue"><input type="radio" name="venue" value="${v.id}" ${i === 0 ? "checked" : ""}>
-      <span><b>${v.name}</b><em>${v.sport}</em></span></label>`).join("");
-  $("venues").onchange = updateSummary;
-}
-
-function fillHours() {
-  const sel = $("startHour");
-  for (let h = 6; h <= 21; h++) sel.add(new Option(`${pad(h)}:00`, h, false, h === 18));
-}
-
-function maxHoursFor(start) { return Math.min(4, 22 - start); }
-
-function syncHours() {
-  const max = maxHoursFor(Number($("startHour").value));
-  [...$("hours").options].forEach((o) => (o.disabled = Number(o.value) > max));
-  if (Number($("hours").value) > max) $("hours").value = String(max);
-}
-
-// Default open time: 00:00 seven days before the booking date (the earliest the rules allow).
-function defaultOpenAt() {
-  if (!$("date").value) return;
-  const d = parseDate($("date").value);
-  d.setDate(d.getDate() - 7);
-  $("openAt").value = `${ymd(d)}T00:00`;
-}
-
-function updateSummary() {
-  const v = document.querySelector('input[name="venue"]:checked');
-  const date = $("date").value;
-  if (!v || !date) { $("summary").textContent = "請選擇場地與日期"; return; }
-  const start = Number($("startHour").value), hours = Number($("hours").value);
-  const lead = Math.round((parseDate(date) - new Date(new Date().toDateString())) / 86400000);
-  let warn = "";
-  if (lead < 3) warn = "<br>⚠ 距今不足 3 天，依規定已無法線上申請";
-  else if (lead > 7) warn = "<br>需等開搶時間到才能申請";
-  $("summary").innerHTML = `預約 <b>${venueName(v.value)}</b><br>${fmtDate(date)} ${timeRange(start, hours)}，共 ${hours} 小時${warn}`;
-}
-
-$("date").onchange = () => { defaultOpenAt(); updateSummary(); };
-$("startHour").onchange = () => { syncHours(); updateSummary(); };
-$("hours").onchange = updateSummary;
-
-$("taskForm").onsubmit = async (e) => {
-  e.preventDefault();
-  const v = document.querySelector('input[name="venue"]:checked');
-  try {
-    await api("/api/tasks", { method: "POST", body: JSON.stringify({
-      venue: v && v.value, date: $("date").value, start_hour: $("startHour").value,
-      hours: $("hours").value, open_at: $("openAt").value, note: $("note").value,
-    }) });
-    toast("已加入預約清單");
-    $("note").value = "";
-    refreshTasks();
-    refreshLogs();
-  } catch (err) { toast(err.message, true); }
-};
-
-/* ---------- task list ---------- */
-const STATUS = {
-  pending: ["info", "等待開搶"], running: ["warn", "執行中"],
-  success: ["ok", "已訂到"], failed: ["err", "失敗"],
-};
-
-function countdown(openAt) {
-  const diff = new Date(openAt) - new Date();
-  if (diff <= 0) return "已到開搶時間";
+function countdown(at) {
+  const diff = new Date(at) - new Date();
+  if (diff <= 0) return "已到時間";
   const s = Math.floor(diff / 1000), d = Math.floor(s / 86400);
   const hms = `${pad(Math.floor(s / 3600) % 24)}:${pad(Math.floor(s / 60) % 60)}:${pad(s % 60)}`;
   return `倒數 ${d ? d + " 天 " : ""}${hms}`;
 }
 
-function renderTasks() {
-  $("taskCount").textContent = tasks.length ? `${tasks.length} 筆` : "";
-  if (!tasks.length) { $("tasks").innerHTML = '<div class="empty">尚無預約任務，從左側新增一筆</div>'; return; }
-  const sorted = [...tasks].sort((a, b) => a.open_at.localeCompare(b.open_at));
-  $("tasks").innerHTML = sorted.map((t) => {
-    let [cls, label] = STATUS[t.status] || ["info", t.status];
-    if (t.status === "pending" && new Date(t.open_at) <= new Date()) [cls, label] = ["warn", "已開放申請"];
-    const open = t.open_at.replace("T", " ");
-    return `<div class="task">
-      <div><div class="title">${venueName(t.venue)}</div>
-        <div>${fmtDate(t.date)} ${timeRange(t.start_hour, t.hours)}</div></div>
-      <div class="side"><span class="pill ${cls}">${label}</span>
-        <div class="actions">
-          <button type="button" disabled title="自動訂場尚未實作，按了也不會送出任何訂單">自動訂場（未實作）</button>
-          <button type="button" class="danger" data-del="${t.id}">刪除</button>
-        </div></div>
-      <div class="meta">開搶 ${open}・<span class="when" data-countdown="${t.open_at}"></span>${t.note ? "・" + escapeHtml(t.note) : ""}</div>
-    </div>`;
-  }).join("");
-  renderCountdowns();
-}
-
-function renderCountdowns() {
-  document.querySelectorAll("[data-countdown]").forEach((el) => (el.textContent = countdown(el.dataset.countdown)));
-}
-
 function escapeHtml(s) { return s.replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c])); }
 
-$("tasks").onclick = async (e) => {
-  const del = e.target.dataset.del, run = e.target.dataset.run;
-  try {
-    if (del && confirm("確定刪除這筆預約任務？")) { await api(`/api/tasks/${del}`, { method: "DELETE" }); toast("已刪除"); refreshTasks(); }
-    if (run) await api(`/api/tasks/${run}/run`, { method: "POST" });
-  } catch (err) { toast(err.message, true); }
-  refreshLogs();
-};
-
-async function refreshTasks() { tasks = await api("/api/tasks"); renderTasks(); }
+// Show `tip` next to table cell `td`, flipping to the left side when it would overflow its .grid-wrap.
+function placeTip(tip, td) {
+  const wrap = td.closest(".grid-wrap").getBoundingClientRect(), r = td.getBoundingClientRect();
+  tip.hidden = false;
+  let left = r.right - wrap.left + 8;
+  if (left + tip.offsetWidth > wrap.width) left = r.left - wrap.left - tip.offsetWidth - 8;
+  tip.style.left = `${Math.max(0, left)}px`;
+  tip.style.top = `${r.top - wrap.top}px`;
+}
 
 /* ---------- logs ---------- */
 async function refreshLogs() {
@@ -625,7 +490,7 @@ $("clearLogView").onclick = () => { logCutoff = refreshLogs.total || 0; refreshL
 
 /* ---------- robot: filters (weekly timetables) + auto hit list ---------- */
 const DAY_LABELS = ["週一", "週二", "週三", "週四", "週五", "週六", "週日"]; // index = Python weekday
-const HOURS = Array.from({ length: 16 }, (_, i) => i + 6); // 06:00 – 21:00 start hours
+let HOURS = []; // every start hour any weekday is open, from the server's opening hours
 const EMPTY_FILTER = { id: null, name: "", enabled: false, venues: [], slots: {} };
 let robotData = { state: {}, filters: [], hits: [] };
 let watch = EMPTY_FILTER; // the filter being edited (heatmap clicks also edit this one)
@@ -675,15 +540,15 @@ function renderWeek() {
   const head = DAY_LABELS.map((label, wd) => {
     const d = bookDates[wd];
     const sub = d ? `${parseDate(d).getMonth() + 1}/${parseDate(d).getDate()}` : "尚未開放";
-    return `<th data-col="${wd}" class="${d ? "bookable" : ""}" title="點擊切換整天">${label}<small>${sub}</small></th>`;
+    return `<th data-col="${wd}" tabindex="0" class="${d ? "bookable" : ""}" title="點擊切換整天">${label}<small>${sub}</small></th>`;
   }).join("");
-  const body = HOURS.map((h) => `<tr><th data-row="${h}" title="點擊切換整列">${pad(h)}:00</th>${
+  const body = HOURS.map((h) => `<tr><th data-row="${h}" tabindex="0" title="點擊切換整列">${pad(h)}:00</th>${
     DAY_LABELS.map((_, wd) => {
       if (!isOpenHour(wd, h)) return `<td class="closed" title="場館未開放"></td>`;
       const sel = isSel(wd, h), n = sel ? openCountFor(wd, h) : null;
       const cls = [sel ? "sel" : "", n > 0 ? "r-open" : n === 0 ? "r-full" : ""].join(" ").trim();
       const txt = n > 0 ? `有空 ${n}` : n === 0 ? "滿" : "";
-      return `<td data-wd="${wd}" data-h="${h}" class="${cls}" title="${DAY_LABELS[wd]} ${pad(h)}:00–${pad(h + 1)}:00">${txt}</td>`;
+      return `<td data-wd="${wd}" data-h="${h}" tabindex="0" class="${cls}" title="${DAY_LABELS[wd]} ${pad(h)}:00–${pad(h + 1)}:00">${txt}</td>`;
     }).join("")}</tr>`).join("");
   $("week").innerHTML = `<thead><tr><th></th>${head}</tr></thead><tbody>${body}</tbody>`;
 }
@@ -775,17 +640,39 @@ $("week").addEventListener("pointerdown", (e) => {
     paint = !isSel(wd, h);
     setSel(wd, h, paint);
     renderWeek();
-  } else if (th && th.dataset.col !== undefined) {
+  } else if (th) {
+    toggleWeekHeader(th);
+  }
+});
+
+// A day header toggles the whole day, an hour header the whole row.
+function toggleWeekHeader(th) {
+  if (th.dataset.col !== undefined) {
     const wd = th.dataset.col, hours = openHours[wd] || [];
     const on = !hours.every((h) => isSel(wd, h));
     hours.forEach((h) => setSel(wd, h, on));
-    renderWeek(); saveWatch();
-  } else if (th && th.dataset.row !== undefined) {
+  } else {
     const h = Number(th.dataset.row), days = DAY_LABELS.map((_, wd) => String(wd)).filter((wd) => isOpenHour(wd, h));
     const on = !days.every((wd) => isSel(wd, h));
     days.forEach((wd) => setSel(wd, h, on));
-    renderWeek(); saveWatch();
   }
+  renderWeek(); saveWatch();
+}
+
+const isActivateKey = (e) => e.key === "Enter" || e.key === " ";
+
+// Keyboard: Enter / Space toggles the focused cell or header. The table is rebuilt, so focus is put back.
+$("week").addEventListener("keydown", (e) => {
+  const el = e.target.closest("td[data-wd], th[data-col], th[data-row]");
+  if (!isActivateKey(e) || !el || !watch.id) return;
+  e.preventDefault();
+  const again = el.dataset.wd !== undefined ? `td[data-wd="${el.dataset.wd}"][data-h="${el.dataset.h}"]`
+    : el.dataset.col !== undefined ? `th[data-col="${el.dataset.col}"]` : `th[data-row="${el.dataset.row}"]`;
+  if (el.matches("td")) {
+    setSel(el.dataset.wd, Number(el.dataset.h), !isSel(el.dataset.wd, Number(el.dataset.h)));
+    renderWeek(); saveWatch();
+  } else toggleWeekHeader(el);
+  $("week").querySelector(again).focus();
 });
 $("week").addEventListener("pointerover", (e) => {
   if (paint === null) return;
@@ -878,6 +765,13 @@ $("hits").addEventListener("change", async (e) => {
   renderHits();
 });
 
+function renderMembersLine() {
+  const m = robotData.members || {};
+  const parts = Object.entries(robotData.member_types || {}).filter(([t]) => m[t]).map(([t, label]) => `${label} ${m[t]} 人`);
+  $("membersLine").innerHTML = `預訂人數：${parts.join("、") || "未設定"}（按「立即預訂」時自動填入）
+    <button type="button" class="small ghost" data-open-settings>修改</button>`;
+}
+
 function renderMembers() {
   const m = robotData.members || {};
   $("members").innerHTML = Object.entries(robotData.member_types || {}).map(([t, label]) => `
@@ -886,7 +780,7 @@ function renderMembers() {
 $("members").onchange = async () => {
   const members = {};
   $("members").querySelectorAll("input[data-mt]").forEach((i) => (members[i.dataset.mt] = Number(i.value) || 0));
-  try { await api("/api/robot/settings", { method: "POST", body: JSON.stringify({ members }) }); robotData.members = members; toast("已更新預訂人數"); }
+  try { await api("/api/robot/settings", { method: "POST", body: JSON.stringify({ members }) }); robotData.members = members; renderMembersLine(); toast("已更新預訂人數"); }
   catch (err) { toast(err.message, true); renderMembers(); }
 };
 
@@ -911,7 +805,9 @@ $("loginBtn").onclick = async () => {
   catch (err) { toast(err.message, true); }
   refreshRobot(); refreshLogs();
 };
-$("logoutBtn").onclick = guard(async () => { await api("/api/session", { method: "DELETE" }); refreshRobot(); refreshLogs(); });
+$("logoutBtn").onclick = guard(async () => {
+  if (!confirm("確定要清除登入狀態？之後要再按「登入網站」才能搜尋與預訂。")) return;
+  await api("/api/session", { method: "DELETE" }); refreshRobot(); refreshLogs(); });
 
 // Polled every 2 s. Filters come from the server only on first load; afterwards the local copy is
 // the one being edited, so only state, hits and settings are refreshed here.
@@ -919,6 +815,7 @@ async function refreshRobot(first = false) {
   const r = await api("/api/robot");
   if (first) {
     openHours = r.open_hours;
+    HOURS = [...new Set(Object.values(openHours).flat())].sort((a, b) => a - b);
     $("interval").innerHTML = [3, 5, 10, 15, 30, 60].filter((m) => m >= r.min_interval).map((m) => `<option value="${m}">${m} 分鐘</option>`).join("");
   } else {
     r.filters = robotData.filters;
@@ -930,6 +827,7 @@ async function refreshRobot(first = false) {
   renderHits();
   renderBookJob();
   if (first) renderMembers();
+  renderMembersLine();
   if (r.state.last_scan !== lastScanSeen) {
     // A robot round updates the shared search results too.
     lastScanSeen = r.state.last_scan;
@@ -1058,12 +956,7 @@ $("avail").addEventListener("pointerover", (e) => {
   tip.innerHTML = `<b>${fmtDate(td.dataset.d)} ${timeRange(Number(td.dataset.h), 1)}</b>
     <div class="r"><span style="color:var(--ok);font-weight:600">線上可租</span><span></span></div>${lines(c.open)}
     <div class="r"><span style="color:var(--warn);font-weight:600">僅限現場</span><span></span></div>${lines(c.onsite)}`;
-  const wrap = td.closest(".grid-wrap").getBoundingClientRect(), r = td.getBoundingClientRect();
-  tip.hidden = false;
-  let left = r.right - wrap.left + 8;
-  if (left + tip.offsetWidth > wrap.width) left = r.left - wrap.left - tip.offsetWidth - 8;
-  tip.style.left = `${Math.max(0, left)}px`;
-  tip.style.top = `${r.top - wrap.top}px`;
+  placeTip(tip, td);
 });
 $("avail").addEventListener("pointerleave", () => ($("availTip").hidden = true));
 
@@ -1129,24 +1022,34 @@ function heatCell(stats, wd, h) {
 }
 const heatBin = (rate) => HEAT_BINS.findIndex(([lo, hi]) => rate >= lo && rate < hi);
 
+// The heatmap is per venue but a filter's hours apply to all of its venues, so say which ones.
+function renderHeatFilterHint(venue) {
+  const hint = $("heatFilterHint");
+  if (!watch.id) { hint.textContent = "到「機器人預訂」建立濾網後，點格子就能把時段加入濾網。"; return; }
+  const scope = watch.venues.length ? watch.venues.map(vShort).join("、") : "還沒選場地";
+  hint.innerHTML = `點格子可加入或移出濾網「<b>${escapeHtml(watch.name)}</b>」的時段，這個濾網掃描：${escapeHtml(scope)}。` +
+    (watch.venues.includes(venue) ? ""
+      : `<br><span style="color:var(--warn)">⚠ 這個濾網沒有包含「${escapeHtml(vShort(venue))}」，加入的時段只會在上面那些場地掃描。</span>`);
+}
+
 function renderHeat() {
   const venue = $("heatVenue").value;
   const stats = heatStats[venue];
+  renderHeatFilterHint(venue);
   if (!stats) {
     $("heat").innerHTML = `<tbody><tr><td class="never" style="height:120px;cursor:default">這個場地還沒有歷史資料，選好起始日後按「更新歷史資料」</td></tr></tbody>`;
     $("heatMeta").textContent = "";
     $("hotList").innerHTML = "";
     return;
   }
-  $("heatFilterName").textContent = watch.id ? `濾網「${watch.name}」` : "目前選取的濾網";
   $("heatMeta").textContent = `${stats.since} ~ ${stats.until}・${stats.courts} 面・更新於 ${fmtTime(stats.generated)}`;
   const head = DAY_LABELS.map((l) => `<th style="cursor:default">${l}</th>`).join("");
   const body = HOURS.map((h) => `<tr><th style="cursor:default">${pad(h)}:00</th>${DAY_LABELS.map((_, wd) => {
     if (!isOpenHour(wd, h)) return `<td class="closed"></td>`;
     const k = heatCell(stats, wd, h);
     const watched = isSel(String(wd), h) ? " watched" : "";
-    if (!k.n) return `<td class="never${watched}" data-wd="${wd}" data-h="${h}">—</td>`;
-    return `<td class="h${heatBin(k.rate)}${k.n < FEW ? " few" : ""}${watched}" data-wd="${wd}" data-h="${h}">${Math.round(k.rate * 100)}%</td>`;
+    if (!k.n) return `<td class="never${watched}" data-wd="${wd}" data-h="${h}" tabindex="0">—</td>`;
+    return `<td class="h${heatBin(k.rate)}${k.n < FEW ? " few" : ""}${watched}" data-wd="${wd}" data-h="${h}" tabindex="0">${Math.round(k.rate * 100)}%</td>`;
   }).join("")}</tr>`).join("");
   $("heat").innerHTML = `<thead><tr><th></th>${head}</tr></thead><tbody>${body}</tbody>`;
 
@@ -1183,12 +1086,7 @@ function heatTip(td) {
     <div class="r"><span>課程／活動／假日</span><span>${other} 面次</span></div>
     ${k.n && k.n < FEW ? '<div class="r"><span>樣本少，僅供參考</span><span></span></div>' : ""}
     <div class="r"><span>${isSel(String(wd), h) ? "點擊移出機器人預訂" : "點擊加入機器人預訂"}</span><span></span></div>`;
-  const wrap = td.closest(".grid-wrap").getBoundingClientRect(), r = td.getBoundingClientRect();
-  tip.hidden = false;
-  let left = r.right - wrap.left + 8;
-  if (left + tip.offsetWidth > wrap.width) left = r.left - wrap.left - tip.offsetWidth - 8;
-  tip.style.left = `${Math.max(0, left)}px`;
-  tip.style.top = `${r.top - wrap.top}px`;
+  placeTip(tip, td);
 }
 
 $("heat").addEventListener("pointerover", (e) => {
@@ -1196,13 +1094,25 @@ $("heat").addEventListener("pointerover", (e) => {
   td ? heatTip(td) : ($("heatTip").hidden = true);
 });
 $("heat").addEventListener("pointerleave", () => ($("heatTip").hidden = true));
-$("heat").addEventListener("click", (e) => {
-  const td = e.target.closest("td[data-wd]");
-  if (!td) return;
+$("heat").addEventListener("focusin", (e) => { const td = e.target.closest("td[data-wd]"); if (td) heatTip(td); });
+$("heat").addEventListener("focusout", () => ($("heatTip").hidden = true));
+
+function toggleHeatCell(td) {
   if (!watch.id) { toast("請先到「機器人預訂」建立一個濾網", true); return; }
   const wd = td.dataset.wd, h = Number(td.dataset.h);
   setSel(wd, h, !isSel(wd, h));
-  saveWatch(); renderHeat(); heatTip($("heat").querySelector(`td[data-wd="${wd}"][data-h="${h}"]`));
+  saveWatch(); renderHeat();
+  const again = $("heat").querySelector(`td[data-wd="${wd}"][data-h="${h}"]`);
+  heatTip(again);
+  return again;
+}
+$("heat").addEventListener("click", (e) => { const td = e.target.closest("td[data-wd]"); if (td) toggleHeatCell(td); });
+$("heat").addEventListener("keydown", (e) => {
+  const td = e.target.closest("td[data-wd]");
+  if (!isActivateKey(e) || !td) return;
+  e.preventDefault();
+  const again = toggleHeatCell(td);
+  if (again) again.focus();
 });
 
 $("heatVenue").onchange = () => {
@@ -1245,15 +1155,8 @@ function initHeatControls() {
 
 /* ---------- init ---------- */
 (async function init() {
-  fillHours();
-  const d = new Date(); d.setDate(d.getDate() + 7);
-  $("date").value = ymd(d);
-  defaultOpenAt();
-  syncHours();
   venues = await api("/api/venues");
-  renderVenues();
-  updateSummary();
-  await Promise.all([loadCred(), refreshTasks(), refreshLogs(), loadHistory(), loadSearch()]);
+  const [cred] = await Promise.all([loadCred(), refreshLogs(), loadHistory(), loadSearch()]);
   await refreshRobot(true);
   initHeatControls();
   initSearchControls();
@@ -1262,8 +1165,7 @@ function initHeatControls() {
   try { tab = localStorage.getItem("tab") || "search"; } catch (e) {}
   showTab(tab);
   if (heatJob.running) pollHistory();
-  tick();
-  setInterval(tick, 1000);
+  if (!cred.has_password) openSettings(); // first run: the account is needed before anything else works
   setInterval(refreshLogs, 3000);
   setInterval(refreshRobot, 2000);
 })();

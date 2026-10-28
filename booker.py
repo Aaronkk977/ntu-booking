@@ -24,9 +24,9 @@ def open_courts(venue: str, day: str, hour: int) -> list[str]:
 
 
 def _playwright_cookies() -> tuple[str, list[dict]]:
-    data = json.loads(session.SESSION_FILE.read_text(encoding="utf-8")) if session.SESSION_FILE.exists() else None
-    if not isinstance(data, dict):
+    if not session.SESSION_FILE.exists():
         raise session.NotLoggedIn("尚未登入")
+    data = json.loads(session.SESSION_FILE.read_text(encoding="utf-8"))
     keys = ("name", "value", "domain", "path", "expires", "httpOnly", "secure", "sameSite")
     cookies = [{k: c[k] for k in keys if k in c} for c in data["cookies"] if session._domain_matches(c["domain"])]
     return data["user_agent"], cookies

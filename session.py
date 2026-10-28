@@ -94,9 +94,6 @@ def fetch(path: str, form: str | None = None) -> str:
     if not SESSION_FILE.exists():
         raise NotLoggedIn("尚未登入")
     data = json.loads(SESSION_FILE.read_text(encoding="utf-8"))
-    if isinstance(data, list):  # session.json written by an older version
-        clear()
-        raise NotLoggedIn("登入資料格式已更新，需要重新登入")
     cookies = [c for c in data["cookies"] if _domain_matches(c["domain"])]
     headers = {"User-Agent": data["user_agent"], "Cookie": "; ".join(f"{c['name']}={c['value']}" for c in cookies)}
     if form is not None:
