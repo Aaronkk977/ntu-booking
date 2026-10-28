@@ -248,12 +248,10 @@
     </div>
 
     <div class="tabpanel" id="panel-search">
-      <p class="hint tab-hint">一次查詢今天到 7 天後每個時段還有幾面空場。租借日前 3 天起只能線上申請；3 天內的空場要到綜合體育館櫃台現場租借。</p>
       <div class="toolbar">
         <div class="group"><span class="label">場地（可複選）</span><span id="searchVenues" class="group"></span></div>
         <button type="button" class="small primary" id="searchBtn">搜尋</button>
         <button type="button" class="small" id="searchForce" title="不使用快取，重新向網站抓取">重新抓取</button>
-        <span class="hint" id="cacheHint" style="margin:0"></span>
       </div>
       <div class="toolbar" id="searchViewBar" hidden>
         <div class="group"><span class="label">顯示</span><span id="searchView" class="group"></span></div>
@@ -268,13 +266,13 @@
         <span><i class="sw" style="background:var(--warn-soft);border:1px solid var(--warn)"></i>僅限現場租借（幾面）</span>
         <span><i></i>已滿或不開放</span>
         <span><i class="closed"></i>不開放租借</span>
-        <span>綠色格子在線上申請期間（3–7 天後）可直接點擊預訂</span>
+        <span>點綠色格子可預訂</span>
       </div>
       <details class="fold"><summary id="availSummary">時段清單</summary><div class="hot-list" id="availList"></div></details>
     </div>
 
     <div class="tabpanel" id="panel-filter" hidden>
-    <p class="hint tab-hint">伺服器開著時，機器人會在背景定期查詢「已啟用」濾網用到的場地（和可租時段搜尋共用同一份資料與快取），符合時段的線上空位會自動加入下方清單。不會自動下單。</p>
+    <p class="hint tab-hint">已啟用的濾網會定期掃描，符合的線上空位自動加入清單。</p>
 
     <div class="scanbar">
       <span><span class="k">狀態</span> <span class="v" id="robotStatus">—</span></span>
@@ -294,7 +292,7 @@
     <details class="fold" id="dismissedFold" hidden><summary id="dismissedSummary"></summary>
       <div class="hits" id="dismissedList" style="margin-top:10px"></div></details>
 
-    <h3 class="sub">濾網 <span class="count">每個濾網是一組「場地＋時段」，可以分別啟用</span></h3>
+    <h3 class="sub">濾網</h3>
     <div class="filter-tabs" id="filterTabs"></div>
     <div id="filterEditor" hidden>
       <div class="toolbar">
@@ -315,13 +313,13 @@
         <span><i class="sel"></i>這個濾網的時段</span>
         <span><i class="open"></i>目前線上有空（幾面）</span>
         <span><i></i>未選</span>
-        <span>日期顯示藍色＝目前可線上申請（租借日前 3–7 天）</span>
+        <span>藍色日期＝可線上申請</span>
       </div>
     </div>
-    <div class="empty" id="filterEmpty" hidden>還沒有濾網，按「＋ 新增濾網」建立一組場地和時段</div>
+    <div class="empty" id="filterEmpty" hidden>還沒有濾網，按「＋ 新增濾網」</div>
     </div>
     <div class="tabpanel" id="panel-heat" hidden>
-      <p class="hint tab-hint">每格的百分比＝過去這個時段有開放線上租借時，被訂走的比例；顏色越深越難訂。</p>
+      <p class="hint tab-hint">百分比＝過去被訂走的比例，顏色越深越難訂。</p>
       <p class="hint tab-hint" id="heatFilterHint"></p>
       <div class="toolbar">
         <div class="group"><span class="label">場地</span><select id="heatVenue" class="compact"></select></div>
@@ -347,7 +345,7 @@
         <li>一年內借了沒用、也沒取消達 <b>3 次</b>，一年內不得再借綜合體育館球場。</li>
         <li>會員證不得供他人使用；違反細則者可能一年內不得租借。</li>
       </ul>
-      <p class="hint">依《校總區運動場館管理辦法實施細則》（115.04.30 發布）整理，每日開放申請的確切時刻未載明。</p>
+      <p class="hint">依《校總區運動場館管理辦法實施細則》整理</p>
     </section>
   </div>
 
@@ -375,22 +373,22 @@
       <button type="submit" class="primary">儲存帳號</button>
       <button type="button" class="danger" id="deleteCred">刪除已存資料</button>
     </div>
-    <p class="hint">密碼以 Windows DPAPI 加密存在本機，只有這台電腦的這個 Windows 帳號能解開。臺大信箱帳號會用同一組帳密走計中登入（不用確認碼），登入過期時也會自動重新登入；其他帳號按「登入網站」後在 Edge 視窗輸入確認碼。</p>
+    <p class="hint">密碼加密存在本機。臺大信箱帳號會自動用計中登入。</p>
   </form>
   <h3 class="sub">預訂人數</h3>
   <div class="group" id="members"></div>
-  <p class="hint">按「立即預訂」時自動填入學校的表單；羽球等場地至少 2 人。改了馬上儲存。</p>
+  <p class="hint">羽球等場地至少 2 人</p>
 </dialog>
 
 <dialog class="modal" id="bookDialog">
   <h2>預訂 <span id="bookWhat" style="margin-left:8px"></span>
     <button type="button" class="small ghost" id="closeBook" aria-label="關閉">✕</button></h2>
   <label class="field"><span>場地</span><select id="bookVenue"></select></label>
-  <label class="field"><span>面數（一面一張訂單，完成一面、關掉分頁後才開下一面）</span>
+  <label class="field"><span>面數</span>
     <input id="bookQty" type="number" min="1" value="1"></label>
   <p class="hint members-line" id="bookMembers"></p>
   <div class="actions"><button type="button" class="primary" id="bookGo">開啟 Edge 預訂</button></div>
-  <p class="hint">會在背景自動選好空場、時段與人數，到學校的確認頁時 Edge 才會跳到最前面；最後的確認與付款由你自己按。</p>
+  <p class="hint">最後的確認與付款請在 Edge 完成</p>
 </dialog>
 
 <div class="toast" id="toast"></div>
@@ -641,7 +639,7 @@ function renderHits() {
         <button type="button" class="small primary" data-book="${h.id}" ${busy ? "disabled" : ""}>立即預訂</button>` : ""}
       <button type="button" class="small ghost" data-dismiss="${h.id}" title="從清單移除">✕</button>
       </span>
-    </div>`).join("") : '<div class="empty">目前沒有符合濾網的空位。機器人掃到時會自動加到這裡。</div>';
+    </div>`).join("") : '<div class="empty">目前沒有符合濾網的空位</div>';
 }
 
 $("week").addEventListener("pointerdown", (e) => {
@@ -744,7 +742,7 @@ $("fDelete").onclick = guard(async () => {
 
 $("interval").onchange = guard(async () => {
   await api("/api/robot/settings", { method: "POST", body: JSON.stringify({ interval_min: Number($("interval").value) }) });
-  toast(`改為每 ${$("interval").value} 分鐘掃描一次（下一輪起生效）`);
+  toast(`改為每 ${$("interval").value} 分鐘掃描一次`);
 });
 $("scanBtn").onclick = guard(async () => { await api("/api/robot/scan", { method: "POST" }); toast("已開始掃描"); refreshRobot(); refreshLogs(); });
 $("hits").onclick = guard(async (e) => {
@@ -784,7 +782,7 @@ function membersText() {
   return `預訂人數：${parts.join("、") || "未設定"}`;
 }
 function renderMembersLine() {
-  $("membersLine").innerHTML = `${membersText()}（按「立即預訂」時自動填入）
+  $("membersLine").innerHTML = `${membersText()}
     <button type="button" class="small ghost" data-open-settings>修改</button>`;
 }
 
@@ -793,7 +791,7 @@ let dismissedHtml = "";
 function renderDismissed() {
   const list = robotData.dismissed || [];
   $("dismissedFold").hidden = !list.length;
-  $("dismissedSummary").textContent = `已移除 ${list.length} 筆（空位還在，可以還原）`;
+  $("dismissedSummary").textContent = `已移除 ${list.length} 筆`;
   const html = list.map((h) => `
     <div class="hit"><b>${fmtDate(h.date)} ${timeRange(h.hour, 1)}</b>
       <span>${venueName(h.venue)}・線上 ${h.count} 面</span>
@@ -827,7 +825,7 @@ function renderBookJob() {
   const bar = $("bookBar");
   bar.hidden = !j.running && !j.error;
   bar.className = "book-bar" + (j.error ? " err" : "");
-  bar.textContent = j.running ? `預訂進行中：${j.message}（完成後關閉 Edge 視窗即可；這段期間搜尋與機器人掃描暫停）`
+  bar.textContent = j.running ? `預訂中：${j.message}`
     : j.error ? `上一次預訂：${j.error}` : "";
   // The booking window holds the site, so anything else that reads it would only queue up behind it.
   const why = j.running ? "Edge 預訂視窗開著，關閉後才能使用" : "";
@@ -839,7 +837,7 @@ function renderBookJob() {
 $("clearGone").onclick = guard(async () => { await api("/api/robot/hits", { method: "DELETE" }); refreshRobot(); });
 
 $("loginBtn").onclick = async () => {
-  try { await api("/api/session/login", { method: "POST" }); toast("登入中…（計中帳號自動登入，不行的話會開 Edge 視窗）"); }
+  try { await api("/api/session/login", { method: "POST" }); toast("登入中…"); }
   catch (err) { toast(err.message, true); }
   refreshRobot(); refreshLogs();
 };
@@ -859,7 +857,9 @@ async function refreshRobot(first = false) {
   }
   bookDates = {};
   r.online_dates.forEach((d) => (bookDates[pyWeekday(d)] = d));
+  const justLoggedIn = !first && !robotData.has_session && r.has_session;
   robotData = r;
+  if (justLoggedIn) maybeAutoSearch("已登入");
   renderRobotState();
   renderHits();
   renderDismissed();
@@ -882,6 +882,7 @@ async function refreshRobot(first = false) {
 /* ---------- available-slot search ---------- */
 let searchResults = {};
 let searchJob = { running: false };
+let cacheMinutes = 10;
 let searchSel = [];       // venue ids ticked for the next search
 let searchView = "all";   // "all" = merged, or one venue id
 
@@ -949,7 +950,7 @@ function renderAvail() {
   renderSearchView();
   const ids = viewVenues();
   if (!ids.length) {
-    $("avail").innerHTML = `<tbody><tr><td class="never" style="height:120px">勾選場地後按「搜尋」（沒有快取時每個場地約 20–30 秒，需先登入網站）</td></tr></tbody>`;
+    $("avail").innerHTML = `<tbody><tr><td class="never" style="height:120px">勾選場地後按「搜尋」</td></tr></tbody>`;
     $("availList").innerHTML = "";
     $("availSummary").textContent = "時段清單";
     return;
@@ -1055,6 +1056,18 @@ async function startSearch(force) {
   } catch (err) { toast(err.message, true); }
   refreshLogs();
 }
+// On opening the panel or logging in: search the ticked venues whose data is missing or older than the
+// cache window. Fresher venues come from the cache, so reopening the page does not hit the site again.
+function maybeAutoSearch(why) {
+  const booking = robotData.book_job && robotData.book_job.running;
+  if (!robotData.has_session || searchJob.running || booking || !searchSel.length) return;
+  const stale = searchSel.filter((id) => !searchResults[id]
+    || Date.now() - new Date(searchResults[id].generated) > cacheMinutes * 60000);
+  if (!stale.length) return;
+  toast(`${why}，自動搜尋 ${stale.map(vShort).join("、")}…`);
+  startSearch(false);
+}
+
 $("searchBtn").onclick = () => startSearch(false);
 $("searchForce").onclick = () => startSearch(true);
 
@@ -1063,7 +1076,7 @@ async function loadSearch() {
   searchResults = r.results; searchJob = r.job;
   const btn = $("searchBtn");
   btn.disabled = $("searchForce").disabled = searchJob.running;
-  $("cacheHint").textContent = `${r.cache_minutes} 分鐘內查過的場地會直接用快取`;
+  cacheMinutes = r.cache_minutes;
   const step = searchJob.venues && searchJob.venues.length > 1 ? `（${searchJob.step}/${searchJob.venues.length}）` : "";
   btn.textContent = searchJob.running
     ? `搜尋中 ${vShort(searchJob.venue)}${step} ${searchJob.done}/${searchJob.total || "?"} 面…`
@@ -1111,11 +1124,11 @@ const heatBin = (rate) => HEAT_BINS.findIndex(([lo, hi]) => rate >= lo && rate <
 // The heatmap is per venue but a filter's hours apply to all of its venues, so say which ones.
 function renderHeatFilterHint(venue) {
   const hint = $("heatFilterHint");
-  if (!watch.id) { hint.textContent = "到「機器人預訂」建立濾網後，點格子就能把時段加入濾網。"; return; }
+  if (!watch.id) { hint.textContent = "建立濾網後，點格子可加入時段。"; return; }
   const scope = watch.venues.length ? watch.venues.map(vShort).join("、") : "還沒選場地";
-  hint.innerHTML = `點格子可加入或移出濾網「<b>${escapeHtml(watch.name)}</b>」的時段，這個濾網掃描：${escapeHtml(scope)}。` +
+  hint.innerHTML = `點格子加入／移出濾網「<b>${escapeHtml(watch.name)}</b>」（${escapeHtml(scope)}）` +
     (watch.venues.includes(venue) ? ""
-      : `<br><span style="color:var(--warn)">⚠ 這個濾網沒有包含「${escapeHtml(vShort(venue))}」，加入的時段只會在上面那些場地掃描。</span>`);
+      : `<br><span style="color:var(--warn)">⚠ 濾網不含「${escapeHtml(vShort(venue))}」</span>`);
 }
 
 function renderHeat() {
@@ -1123,7 +1136,7 @@ function renderHeat() {
   const stats = heatStats[venue];
   renderHeatFilterHint(venue);
   if (!stats) {
-    $("heat").innerHTML = `<tbody><tr><td class="never" style="height:120px;cursor:default">這個場地還沒有歷史資料，選好起始日後按「更新歷史資料」</td></tr></tbody>`;
+    $("heat").innerHTML = `<tbody><tr><td class="never" style="height:120px;cursor:default">還沒有歷史資料，按「更新歷史資料」</td></tr></tbody>`;
     $("heatMeta").textContent = "";
     $("hotList").innerHTML = "";
     return;
@@ -1209,7 +1222,7 @@ $("heatVenue").onchange = () => {
 $("heatRefresh").onclick = async () => {
   try {
     await api("/api/history", { method: "POST", body: JSON.stringify({ venue: $("heatVenue").value, since: $("heatSince").value }) });
-    toast("開始更新歷史資料，約需 20–30 秒");
+    toast("開始更新歷史資料");
     pollHistory();
   } catch (err) { toast(err.message, true); }
   refreshLogs();
@@ -1245,7 +1258,7 @@ function initHeatControls() {
   await refreshRobot(true);
   initHeatControls();
   initSearchControls();
-  if (searchJob.running) pollSearch();
+  if (searchJob.running) pollSearch(); else maybeAutoSearch("開啟控制台");
   let tab = "search";
   try { tab = localStorage.getItem("tab") || "search"; } catch (e) {}
   showTab(tab);

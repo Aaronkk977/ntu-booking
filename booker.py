@@ -194,7 +194,7 @@ def _book(venue, day, hour, members, status, quantity, submit, keep_open_s, insp
                 _hide(page)  # the window was shown for the previous court
             page.route("**/*", _skip_extras)
             started = time.monotonic()
-            status(f"{tag}自動填寫中，完成後 Edge 會跳到最前面…")
+            status(f"{tag}自動填寫中…")
             try:
                 court = _fill_one(page, venue, day, hour, preferred, done, members)
                 page.unroute("**/*", _skip_extras)  # the confirmation page loads in full
@@ -210,7 +210,7 @@ def _book(venue, day, hour, members, status, quantity, submit, keep_open_s, insp
                 page.unroute("**/*", _skip_extras)
                 _show(page)
                 first = str(e).splitlines()[0] if str(e) else e.__class__.__name__
-                status(f"{tag}自動填寫沒有完成（{first}），Edge 已跳出，請在視窗裡手動完成；細節存在 snapshots/_booking_failed.txt")
+                status(f"{tag}自動填寫卡住（{first}），請在 Edge 手動完成")
                 _wait_closed(page, browser, keep_open_s)
                 if browser.is_connected():
                     browser.close()
@@ -223,13 +223,13 @@ def _book(venue, day, hour, members, status, quantity, submit, keep_open_s, insp
                 status(f"只剩 {len(done)} 面可訂，其餘已被訂走")
                 break
             # Time from the click (the first court) or from closing the previous tab (the next ones).
-            took = f"，共花了 {time.monotonic() - (asked if k == 1 else started):.1f} 秒"
+            took = f"（共花了 {time.monotonic() - (asked if k == 1 else started):.1f} 秒）"
             _show(page)
             if submit:
-                more = "完成後關閉這個分頁，就會接著開下一面" if k < quantity else "完成後關閉視窗即可"
-                status(f"{tag}已到學校的確認頁{took}，請在 Edge 確認並完成預訂（{more}）")
+                more = "，完成後關閉分頁會開下一面" if k < quantity else ""
+                status(f"{tag}已到確認頁{took}，請在 Edge 完成預訂{more}")
             else:
-                status(f"{tag}已填好表單（測試模式，未按下一步）{took}")
+                status(f"{tag}已填好表單（測試模式）{took}")
             done.append(court)
             if inspect:
                 inspect(page)
