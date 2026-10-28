@@ -9,7 +9,6 @@ import scanner
 import session
 
 MEMBER_TYPES = {"1": "學生", "2": "教職", "3": "眷屬校友", "4": "校外人士"}
-KEEP_OPEN_S = 10 * 60  # how long the window (and the site lock) is held for the user to confirm
 
 
 class SlotGone(Exception):
@@ -33,10 +32,11 @@ def _playwright_cookies() -> tuple[str, list[dict]]:
     return data["user_agent"], cookies
 
 
-def _wait_closed(page, browser, keep_open_s: int) -> None:
-    """Wait until the user closes this tab (or the whole window), up to keep_open_s.
+def _wait_closed(page, browser, keep_open_s: int | None) -> None:
+    """Wait until the user closes this tab (or the whole window), or keep_open_s if given. The user may still
+    be confirming or paying, so by default there is no time limit: the window is never closed from here.
     wait_for_timeout (not time.sleep) keeps Playwright processing events, so the close is noticed."""
-    deadline = time.monotonic() + keep_open_s
+    deadline = time.monotonic() + keep_open_s if keep_open_s else float("inf")
     while time.monotonic() < deadline and browser.is_connected() and not page.is_closed():
         try:
             page.wait_for_timeout(1000)
@@ -51,6 +51,7 @@ def _fill_one(page, venue: str, day: str, hour: int, preferred: list[str], exclu
     page.goto(f"{session.BASE}/order/?Add={venue}")
     page.wait_for_url(lambda u: "/order/A/" in u or "U=login" in u, timeout=20000)
     if "U=login" in page.url:
+        session.clear()
         raise session.NotLoggedIn("登入已過期")
     tabs = page.eval_on_selector_all("a.VSMenu", "els => els.map(e => e.getAttribute('title'))")
     candidates = [c for c in preferred + [t for t in tabs if t not in preferred] if c not in exclude]
@@ -84,7 +85,7 @@ def _fill_one(page, venue: str, day: str, hour: int, preferred: list[str], exclu
 
 
 def open_booking(venue: str, day: str, hour: int, members: dict[str, int], status, quantity: int = 1,
-                 submit: bool = True, keep_open_s: int = KEEP_OPEN_S, inspect=None) -> list[str]:
+                 submit: bool = True, keep_open_s: int | None = None, inspect=None) -> list[str]:
     """Book `quantity` courts for one slot. The site allows one court per order, so courts are done one
     after another: each gets its own tab stopped at the school's confirmation page, and the next one
     starts when the user closes that tab. Returns the courts that reached the confirmation page.

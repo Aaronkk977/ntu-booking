@@ -443,6 +443,9 @@ function toast(msg, isErr = false) {
   toast.timer = setTimeout(() => (t.className = "toast"), 2600);
 }
 
+// Wraps an async event handler so a failed request shows up as an error toast instead of vanishing.
+const guard = (fn) => async (...args) => { try { await fn(...args); } catch (err) { toast(err.message, true); } };
+
 async function api(path, opts = {}) {
   const res = await fetch(path, { headers: { "Content-Type": "application/json" }, ...opts });
   const data = await res.json().catch(() => ({}));
@@ -485,13 +488,13 @@ $("credForm").onsubmit = async (e) => {
   } catch (err) { toast(err.message, true); }
 };
 
-$("deleteCred").onclick = async () => {
+$("deleteCred").onclick = guard(async () => {
   if (!confirm("確定要刪除已儲存的帳號密碼？")) return;
   await api("/api/credentials", { method: "DELETE" });
   toast("已刪除");
   loadCred();
   refreshLogs();
-};
+});
 
 /* ---------- new task form ---------- */
 function renderVenues() {
@@ -723,7 +726,8 @@ function renderRobotState() {
   $("loginBtn").disabled = !!r.login_in_progress;
 
   const active = r.filters.filter((f) => f.enabled && f.venues.length && Object.keys(f.slots).length).length;
-  $("robotStatus").textContent = st.running
+  $("robotStatus").textContent = r.book_job && r.book_job.running && !st.running ? "暫停（預訂視窗開著）"
+    : st.running
     ? `掃描中 ${vShort(st.venue || "")} ${st.done || 0}/${st.total || "?"}`
     : active ? `運作中（${active} 個濾網啟用）` : "待命（沒有啟用的濾網）";
   $("lastScan").textContent = fmtTime(st.last_scan);
@@ -829,21 +833,21 @@ $("filterTabs").onclick = async (e) => {
     refreshLogs();
   } else if (tab.dataset.fid) selectFilter(tab.dataset.fid);
 };
-$("fDelete").onclick = async () => {
+$("fDelete").onclick = guard(async () => {
   if (!watch.id || !confirm(`確定刪除濾網「${watch.name}」？它自動加入清單的項目也會一起移除。`)) return;
   clearTimeout(saveTimer);
   await api(`/api/robot/filters/${watch.id}`, { method: "DELETE" });
   robotData.filters = robotData.filters.filter((f) => f.id !== watch.id);
   selectFilter(null);
   refreshRobot(); refreshLogs();
-};
+});
 
-$("interval").onchange = async () => {
+$("interval").onchange = guard(async () => {
   await api("/api/robot/settings", { method: "POST", body: JSON.stringify({ interval_min: Number($("interval").value) }) });
   toast(`改為每 ${$("interval").value} 分鐘掃描一次（下一輪起生效）`);
-};
-$("scanBtn").onclick = async () => { await api("/api/robot/scan", { method: "POST" }); toast("已開始掃描"); refreshRobot(); refreshLogs(); };
-$("hits").onclick = async (e) => {
+});
+$("scanBtn").onclick = guard(async () => { await api("/api/robot/scan", { method: "POST" }); toast("已開始掃描"); refreshRobot(); refreshLogs(); });
+$("hits").onclick = guard(async (e) => {
   const book = e.target.dataset.book, dismiss = e.target.dataset.dismiss;
   if (book) {
     try {
@@ -855,7 +859,7 @@ $("hits").onclick = async (e) => {
     await api(`/api/robot/hits/${dismiss}/dismiss`, { method: "POST" });
     refreshRobot();
   }
-};
+});
 
 $("hits").addEventListener("change", async (e) => {
   const input = e.target.closest("input[data-want]");
@@ -891,16 +895,23 @@ function renderBookJob() {
   const bar = $("bookBar");
   bar.hidden = !j.running && !j.error;
   bar.className = "book-bar" + (j.error ? " err" : "");
-  bar.textContent = j.running ? `預訂進行中：${j.message}（完成後關閉 Edge 視窗即可）` : j.error ? `上一次預訂：${j.error}` : "";
+  bar.textContent = j.running ? `預訂進行中：${j.message}（完成後關閉 Edge 視窗即可；這段期間搜尋與機器人掃描暫停）`
+    : j.error ? `上一次預訂：${j.error}` : "";
+  // The booking window holds the site, so anything else that reads it would only queue up behind it.
+  const why = j.running ? "Edge 預訂視窗開著，關閉後才能使用" : "";
+  $("scanBtn").disabled = !!j.running;
+  if (!searchJob.running) $("searchBtn").disabled = $("searchForce").disabled = !!j.running;
+  if (!heatJob.running) $("heatRefresh").disabled = !!j.running;
+  [$("scanBtn"), $("searchBtn"), $("heatRefresh")].forEach((b) => (b.title = why));
 }
-$("clearGone").onclick = async () => { await api("/api/robot/hits", { method: "DELETE" }); refreshRobot(); };
+$("clearGone").onclick = guard(async () => { await api("/api/robot/hits", { method: "DELETE" }); refreshRobot(); });
 
 $("loginBtn").onclick = async () => {
   try { await api("/api/session/login", { method: "POST" }); toast("已開啟 Edge，請輸入確認碼後登入"); }
   catch (err) { toast(err.message, true); }
   refreshRobot(); refreshLogs();
 };
-$("logoutBtn").onclick = async () => { await api("/api/session", { method: "DELETE" }); refreshRobot(); refreshLogs(); };
+$("logoutBtn").onclick = guard(async () => { await api("/api/session", { method: "DELETE" }); refreshRobot(); refreshLogs(); });
 
 // Polled every 2 s. Filters come from the server only on first load; afterwards the local copy is
 // the one being edited, so only state, hits and settings are refreshed here.

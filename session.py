@@ -70,7 +70,16 @@ def interactive_login(username: str, password: str, timeout_s: int = 300) -> Non
 
 
 def has_session() -> bool:
+    """True while a login is saved. An expired login is deleted as soon as the site reports it."""
     return SESSION_FILE.exists()
+
+
+def check() -> None:
+    """Ask the site once whether the saved login still works (deletes it if not)."""
+    try:
+        fetch(PROBE_PATH)
+    except (NotLoggedIn, OSError):  # offline: leave it to the next real request
+        pass
 
 
 def clear() -> None:
@@ -86,6 +95,7 @@ def fetch(path: str, form: str | None = None) -> str:
         raise NotLoggedIn("尚未登入")
     data = json.loads(SESSION_FILE.read_text(encoding="utf-8"))
     if isinstance(data, list):  # session.json written by an older version
+        clear()
         raise NotLoggedIn("登入資料格式已更新，需要重新登入")
     cookies = [c for c in data["cookies"] if _domain_matches(c["domain"])]
     headers = {"User-Agent": data["user_agent"], "Cookie": "; ".join(f"{c['name']}={c['value']}" for c in cookies)}
@@ -101,5 +111,6 @@ def fetch(path: str, form: str | None = None) -> str:
     if is_logged_out_page(html):
         SNAPSHOT_DIR.mkdir(exist_ok=True)
         (SNAPSHOT_DIR / "_logged_out.html").write_text(html, encoding="utf-8")
+        clear()  # so the header stops showing "logged in"
         raise NotLoggedIn("登入已過期")
     return html

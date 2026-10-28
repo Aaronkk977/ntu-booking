@@ -85,9 +85,11 @@ def _store_result(venue: str, result: dict) -> None:
     _search_results[venue] = result
 
 
-ROBOT = robot.Robot(log, VENUE_NAMES, VENUE_IDS_ORDERED, on_result=_store_result)
-
 _book_job = {"running": False, "hit": None, "message": "", "error": None}
+BOOKING_BUSY = "Edge 預訂視窗開著時無法讀取網站，請先完成預訂並關閉視窗"
+
+ROBOT = robot.Robot(log, VENUE_NAMES, VENUE_IDS_ORDERED, on_result=_store_result,
+                    is_paused=lambda: _book_job["running"])
 
 
 def _run_book(hit: dict, members: dict, quantity: int) -> None:
@@ -369,6 +371,8 @@ class Handler(BaseHTTPRequestHandler):
             ROBOT.reschedule()
             return self._json(f)
         if path == "/api/robot/scan":
+            if _book_job["running"]:
+                return self._json({"error": BOOKING_BUSY}, 409)
             ROBOT.scan_now()
             log("info", "手動觸發機器人掃描")
             return self._json({"ok": True})
@@ -384,6 +388,8 @@ class Handler(BaseHTTPRequestHandler):
         if path == "/api/search":
             if _search_job["running"]:
                 return self._json({"error": "搜尋進行中"}, 409)
+            if _book_job["running"]:
+                return self._json({"error": BOOKING_BUSY}, 409)
             venues = [v for v in VENUE_IDS_ORDERED if v in (body.get("venues") or [])]
             if not venues:
                 return self._json({"error": "請至少選一個場地"}, 400)
@@ -395,6 +401,8 @@ class Handler(BaseHTTPRequestHandler):
         if path == "/api/history":
             if _history_job["running"]:
                 return self._json({"error": "歷史資料正在更新中"}, 409)
+            if _book_job["running"]:
+                return self._json({"error": BOOKING_BUSY}, 409)
             venue = body.get("venue")
             if venue not in VENUE_IDS:
                 return self._json({"error": "請選擇場地"}, 400)
@@ -473,6 +481,8 @@ if __name__ == "__main__":
     url = f"http://{HOST}:{PORT}"
     log("info", "控制台已啟動")
     ROBOT.reschedule()  # start scanning right away if any filter is enabled
+    if session.has_session():  # a login saved hours ago has probably expired; find out before showing "logged in"
+        threading.Thread(target=session.check, daemon=True).start()
     print(f"臺大場地預約控制台：{url}  (Ctrl+C 結束)")
     if "--no-browser" not in sys.argv:
         webbrowser.open(url)

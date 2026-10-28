@@ -155,8 +155,9 @@ def update_hits(filters: list[dict], results: dict[str, dict]) -> list[dict]:
 # ---------- loop ----------
 
 class Robot:
-    def __init__(self, log, venue_names: dict[str, str], venue_order: list[str], on_result):
+    def __init__(self, log, venue_names: dict[str, str], venue_order: list[str], on_result, is_paused=lambda: False):
         self.log, self.venue_names, self.venue_order, self.on_result = log, venue_names, venue_order, on_result
+        self.is_paused = is_paused  # e.g. a booking window holds the site; the due round runs once it closes
         self.lock = threading.Lock()
         self.state = {"running": False, "last_scan": None, "next_scan": None, "error": None,
                       "venue": None, "done": 0, "total": 0}
@@ -188,7 +189,7 @@ class Robot:
             self._wake.clear()
             with self.lock:
                 due = self.state["next_scan"] and datetime.fromisoformat(self.state["next_scan"]) <= datetime.now()
-            if not due:
+            if not due or self.is_paused():
                 continue
             try:
                 self._scan()
