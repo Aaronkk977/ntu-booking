@@ -1,0 +1,1261 @@
+<!doctype html>
+<html lang="zh-Hant-TW">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>臺大場地預約控制台</title>
+<style>
+  :root {
+    --bg: #f4f5f7;
+    --card: #ffffff;
+    --text: #1d2330;
+    --muted: #6b7280;
+    --line: #e3e6eb;
+    --accent: #1f5fbf;
+    --accent-soft: #e8f0fc;
+    --ok: #1a7f4b;
+    --ok-soft: #e4f5ec;
+    --warn: #a15c00;
+    --warn-soft: #fdf1df;
+    --err: #b42318;
+    --err-soft: #fdecea;
+    --radius: 10px;
+    --font: "Microsoft JhengHei UI", "Microsoft JhengHei", "PingFang TC", "Noto Sans TC", "Segoe UI", sans-serif;
+    --mono: "Cascadia Mono", Consolas, "Microsoft JhengHei", monospace;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #14171c; --card: #1c2027; --text: #e6e8ec; --muted: #9aa3af; --line: #2c323b;
+      --accent: #6ea2ff; --accent-soft: #1f2d45; --ok: #5cc98d; --ok-soft: #173326;
+      --warn: #f0b155; --warn-soft: #3a2c15; --err: #ff8a80; --err-soft: #3d1f1d;
+    }
+  }
+  * { box-sizing: border-box; }
+  [hidden] { display: none !important; }
+  body { margin: 0; background: var(--bg); color: var(--text); font-family: var(--font); font-size: 14px; line-height: 1.55; }
+  header {
+    display: flex; align-items: center; gap: 16px; flex-wrap: wrap;
+    padding: 14px 24px; background: var(--card); border-bottom: 1px solid var(--line);
+    position: sticky; top: 0; z-index: 5;
+  }
+  header h1 { font-size: 17px; margin: 0; font-weight: 700; letter-spacing: .5px; }
+  header .spacer { flex: 1; }
+  .clock { font-family: var(--mono); font-size: 15px; font-variant-numeric: tabular-nums; }
+  .clock small { color: var(--muted); font-family: var(--font); margin-right: 6px; }
+  .pill { display: inline-flex; align-items: center; gap: 6px; padding: 3px 10px; border-radius: 999px; font-size: 12px; font-weight: 600; }
+  .pill::before { content: ""; width: 7px; height: 7px; border-radius: 50%; background: currentColor; }
+  .pill.ok { background: var(--ok-soft); color: var(--ok); }
+  .pill.warn { background: var(--warn-soft); color: var(--warn); }
+  .pill.err { background: var(--err-soft); color: var(--err); }
+  .pill.info { background: var(--accent-soft); color: var(--accent); }
+
+  main { max-width: 1180px; margin: 0 auto; padding: 20px 24px 40px; display: grid; grid-template-columns: 380px minmax(0, 1fr); gap: 20px; align-items: start; }
+  @media (max-width: 900px) { main { grid-template-columns: 1fr; padding: 16px; } header { padding: 12px 16px; } }
+  .col { display: grid; gap: 20px; min-width: 0; }
+  section.card { background: var(--card); border: 1px solid var(--line); border-radius: var(--radius); padding: 18px; min-width: 0; }
+  section.card > h2 { font-size: 15px; margin: 0 0 14px; display: flex; align-items: center; gap: 8px; }
+  section.card > h2 .count { color: var(--muted); font-weight: 400; font-size: 13px; }
+  section.card > h2 .right { margin-left: auto; }
+
+  label.field { display: block; margin-bottom: 12px; }
+  label.field > span { display: block; font-size: 12.5px; color: var(--muted); margin-bottom: 4px; }
+  input, select, textarea {
+    width: 100%; font: inherit; color: var(--text); background: var(--bg);
+    border: 1px solid var(--line); border-radius: 7px; padding: 8px 10px; outline: none;
+  }
+  input:focus, select:focus { border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-soft); }
+  .pw-wrap { position: relative; }
+  .pw-wrap input { padding-right: 56px; }
+  .pw-wrap button { position: absolute; right: 4px; top: 4px; bottom: 4px; padding: 0 10px; }
+  .row { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+
+  button { font: inherit; cursor: pointer; border-radius: 7px; border: 1px solid var(--line); background: var(--card); color: var(--text); padding: 7px 14px; }
+  button:hover { border-color: var(--accent); }
+  button.primary { background: var(--accent); border-color: var(--accent); color: #fff; font-weight: 600; }
+  button.primary:hover { filter: brightness(1.08); }
+  button.ghost { border-color: transparent; background: transparent; color: var(--muted); }
+  button.ghost:hover { color: var(--text); background: var(--bg); }
+  button.danger:hover { border-color: var(--err); color: var(--err); }
+  button:disabled { opacity: .5; cursor: not-allowed; }
+  .actions { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
+  .hint { font-size: 12.5px; color: var(--muted); margin: 6px 0 0; }
+
+  .venues { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin-bottom: 12px; }
+  .venue { position: relative; }
+  .venue input { position: absolute; opacity: 0; pointer-events: none; }
+  .venue span { display: block; border: 1px solid var(--line); border-radius: 8px; padding: 8px 10px; cursor: pointer; }
+  .venue b { display: block; font-size: 13.5px; }
+  .venue em { font-style: normal; font-size: 12px; color: var(--muted); }
+  .venue input:checked + span { border-color: var(--accent); background: var(--accent-soft); }
+  .venue input:focus-visible + span { box-shadow: 0 0 0 3px var(--accent-soft); }
+
+  .summary { background: var(--bg); border-radius: 8px; padding: 10px 12px; font-size: 13px; margin: 4px 0 14px; }
+  .summary b { color: var(--accent); }
+
+  .tasks { display: grid; gap: 10px; }
+  .task { display: grid; grid-template-columns: 1fr auto; gap: 6px 16px; border: 1px solid var(--line); border-radius: 9px; padding: 12px 14px; }
+  .task .title { font-weight: 700; font-size: 14.5px; }
+  .task .meta { color: var(--muted); font-size: 12.5px; }
+  .task .when { font-family: var(--mono); font-variant-numeric: tabular-nums; font-size: 13px; }
+  .task .side { display: flex; flex-direction: column; align-items: flex-end; gap: 8px; grid-row: span 2; }
+  .empty { color: var(--muted); text-align: center; padding: 28px 0; border: 1px dashed var(--line); border-radius: 9px; }
+
+  .logs { font-family: var(--mono); font-size: 12.5px; max-height: 280px; overflow-y: auto; background: var(--bg); border-radius: 8px; padding: 8px 10px; }
+  .logs div { padding: 2px 0; display: flex; gap: 10px; }
+  .logs time { color: var(--muted); flex: none; }
+  .logs .warn { color: var(--warn); }
+  .logs .error { color: var(--err); }
+
+  ul.rules { margin: 0; padding-left: 18px; color: var(--muted); font-size: 13px; }
+  ul.rules li { margin-bottom: 4px; }
+  ul.rules b { color: var(--text); font-weight: 600; }
+
+  .wide { grid-column: 1 / -1; }
+  .toolbar { display: flex; flex-wrap: wrap; gap: 10px 18px; align-items: center; margin-bottom: 14px; }
+  .toolbar .group { display: flex; gap: 6px; align-items: center; flex-wrap: wrap; }
+  .toolbar .label { font-size: 12.5px; color: var(--muted); margin-right: 2px; }
+  .chip { position: relative; }
+  .chip input { position: absolute; opacity: 0; pointer-events: none; }
+  .chip span { display: inline-block; padding: 4px 11px; border: 1px solid var(--line); border-radius: 999px; cursor: pointer; font-size: 13px; user-select: none; }
+  .chip input:checked + span { background: var(--accent); border-color: var(--accent); color: #fff; }
+  .chip input:focus-visible + span { box-shadow: 0 0 0 3px var(--accent-soft); }
+  select.compact { width: auto; padding: 4px 8px; }
+  button.small { padding: 4px 10px; font-size: 13px; }
+
+  .switch { position: relative; display: inline-flex; align-items: center; gap: 8px; cursor: pointer; user-select: none; font-weight: 600; }
+  .switch input { position: absolute; opacity: 0; }
+  .switch .track { width: 38px; height: 22px; border-radius: 999px; background: var(--line); position: relative; transition: .15s; }
+  .switch .track::after { content: ""; position: absolute; top: 3px; left: 3px; width: 16px; height: 16px; border-radius: 50%; background: #fff; transition: .15s; }
+  .switch input:checked + .track { background: var(--ok); }
+  .switch input:checked + .track::after { left: 19px; }
+  .switch input:focus-visible + .track { box-shadow: 0 0 0 3px var(--accent-soft); }
+
+  .scanbar { display: flex; flex-wrap: wrap; gap: 8px 18px; align-items: center; background: var(--bg); border-radius: 8px; padding: 8px 12px; margin-bottom: 14px; font-size: 13px; }
+  .scanbar .k { color: var(--muted); }
+  .scanbar .v { font-family: var(--mono); font-variant-numeric: tabular-nums; }
+  .scanbar .err { color: var(--err); }
+  .scanbar .push { margin-left: auto; display: flex; gap: 6px; }
+
+  .grid-wrap { overflow-x: auto; }
+  table.week { border-collapse: separate; border-spacing: 3px; width: 100%; min-width: 620px; user-select: none; touch-action: none; }
+  table.week th { font-weight: 600; font-size: 12.5px; padding: 4px 2px; cursor: pointer; border-radius: 6px; }
+  table.week th:hover { background: var(--bg); }
+  table.week thead th small { display: block; font-weight: 400; color: var(--muted); font-size: 11.5px; }
+  table.week thead th.bookable small { color: var(--accent); font-weight: 600; }
+  table.week tbody th { width: 70px; text-align: right; padding-right: 8px; font-family: var(--mono); font-weight: 400; color: var(--muted); }
+  table.week td { height: 26px; border-radius: 5px; background: var(--bg); border: 1px solid var(--line); cursor: pointer; text-align: center; font-size: 11.5px; font-weight: 600; }
+  table.week td:hover { border-color: var(--accent); }
+  table.week td.sel { background: var(--accent-soft); border-color: var(--accent); color: var(--accent); }
+  table.week td.closed { cursor: not-allowed; border-color: transparent;
+    background: repeating-linear-gradient(135deg, transparent 0 5px, var(--line) 5px 6px); }
+  table.week td.r-open { background: var(--ok); border-color: var(--ok); color: #fff; }
+  table.week td.r-full { color: var(--muted); }
+  table.week td.r-unknown { color: var(--warn); }
+  .legend { display: flex; flex-wrap: wrap; gap: 14px; font-size: 12px; color: var(--muted); margin-top: 10px; }
+  .legend i { display: inline-block; width: 14px; height: 14px; border-radius: 4px; vertical-align: -2px; margin-right: 5px; border: 1px solid var(--line); background: var(--bg); }
+  .legend i.sel { background: var(--accent-soft); border-color: var(--accent); }
+  .legend i.open { background: var(--ok); border-color: var(--ok); }
+  .legend i.closed { background: repeating-linear-gradient(135deg, transparent 0 3px, var(--line) 3px 4px); }
+
+  .found { display: grid; gap: 8px; margin-top: 14px; }
+  .found .item { display: flex; align-items: center; gap: 12px; padding: 8px 12px; border-radius: 8px; background: var(--ok-soft); color: var(--ok); font-weight: 600; }
+  .found .item button { margin-left: auto; }
+
+  .tabs { display: flex; gap: 4px; border-bottom: 1px solid var(--line); margin: -4px 0 12px; }
+  .tab { border: none; border-bottom: 2px solid transparent; border-radius: 0; background: none; padding: 6px 14px 8px; font-weight: 600; color: var(--muted); }
+  .tab:hover { color: var(--text); border-color: transparent; }
+  .tab[aria-selected="true"] { color: var(--accent); border-bottom-color: var(--accent); }
+  .tab-hint { margin: 0 0 12px; }
+  input.compact { width: auto; padding: 4px 8px; }
+
+  /* Sequential heat ramp: one hue, light -> dark = harder to get, in both themes. */
+  :root { --h0: #cde2fb; --h1: #9ec5f4; --h2: #6da7ec; --h3: #2a78d6; --h4: #184f95; --h-ink-dark: #1d2330; --h-ink-light: #ffffff; }
+
+  table.avail td { cursor: default; font-size: 12px; }
+  .seg { display: inline-flex; border: 1px solid var(--line); border-radius: 7px; overflow: hidden; flex-wrap: wrap; }
+  .seg button { border: none; border-radius: 0; padding: 4px 11px; font-size: 13px; background: none; }
+  .seg button + button { border-left: 1px solid var(--line); }
+  .seg button[aria-pressed="true"] { background: var(--accent-soft); color: var(--accent); font-weight: 600; }
+  .avail-venue { margin-top: 10px; }
+  details.fold { margin-top: 14px; border-top: 1px solid var(--line); padding-top: 10px; }
+  details.fold > summary { cursor: pointer; font-weight: 600; font-size: 13.5px; color: var(--muted); user-select: none; }
+  details.fold > summary:hover { color: var(--text); }
+  details.fold[open] > summary { color: var(--text); }
+  .avail-venue > b { display: block; margin-bottom: 4px; }
+  table.avail td.on { background: var(--ok); border-color: var(--ok); color: #fff; }
+  table.avail td.site { background: var(--warn-soft); border-color: var(--warn); color: var(--warn); }
+  table.avail td.none { color: transparent; }
+  table.avail thead th { cursor: default; }
+  table.avail thead th small.site { color: var(--warn); font-weight: 600; }
+  table.avail thead th small.online { color: var(--ok); font-weight: 600; }
+  table.heat td { cursor: pointer; font-variant-numeric: tabular-nums; font-weight: 600; border-color: transparent; }
+  table.heat td.h0 { background: var(--h0); color: var(--h-ink-dark); }
+  table.heat td.h1 { background: var(--h1); color: var(--h-ink-dark); }
+  table.heat td.h2 { background: var(--h2); color: var(--h-ink-dark); }
+  table.heat td.h3 { background: var(--h3); color: var(--h-ink-light); }
+  table.heat td.h4 { background: var(--h4); color: var(--h-ink-light); }
+  table.heat td.never { background: repeating-linear-gradient(135deg, transparent 0 5px, var(--line) 5px 6px); color: var(--muted); font-weight: 400; }
+  table.heat td.few { outline: 1.5px dashed var(--muted); outline-offset: -4px; }
+  table.heat td.watched { box-shadow: inset 0 0 0 2px var(--text); }
+  table.heat td:hover { outline: 2px solid var(--text); outline-offset: 1px; }
+  .legend .sw { display: inline-block; width: 22px; height: 14px; border-radius: 3px; vertical-align: -2px; margin-right: 2px; }
+  /* legend swatches that mirror the heat cells' frames */
+  .legend .sw.frame-few { background: var(--h1); outline: 1.5px dashed var(--muted); outline-offset: -3px; }
+  .legend .sw.frame-watched { background: var(--h1); box-shadow: inset 0 0 0 2px var(--text); }
+  .tip { position: absolute; z-index: 4; pointer-events: none; background: var(--card); border: 1px solid var(--line); border-radius: 8px;
+    padding: 8px 10px; font-size: 12.5px; box-shadow: 0 4px 14px rgba(0,0,0,.18); min-width: 170px; }
+  .tip b { display: block; margin-bottom: 4px; }
+  .tip .r { display: flex; justify-content: space-between; gap: 14px; color: var(--muted); }
+  .tip .r span:last-child { color: var(--text); font-variant-numeric: tabular-nums; }
+  .hot-list { margin-top: 14px; font-size: 13px; }
+  .hot-list ol { margin: 6px 0 0; padding-left: 20px; }
+  .hot-list li { margin-bottom: 2px; }
+
+  h3.sub { font-size: 14px; margin: 18px 0 10px; display: flex; align-items: center; gap: 8px; }
+  h3.sub .count { color: var(--muted); font-weight: 400; font-size: 12.5px; }
+  h3.sub .right { margin-left: auto; }
+  .hits { display: grid; gap: 6px; }
+  .hit { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 12px; padding: 8px 10px 8px 12px; border: 1px solid var(--line); border-radius: 8px; font-size: 13px; }
+  .hit.available { border-color: var(--ok); background: var(--ok-soft); }
+  .hit.gone { opacity: .65; }
+  .hit .tag { font-size: 12px; padding: 1px 8px; border-radius: 999px; background: var(--bg); color: var(--muted); }
+  .hit .when { color: var(--muted); font-size: 12px; margin-left: auto; }
+  .hit .acts { display: inline-flex; align-items: center; gap: 8px; white-space: nowrap; }
+  .hit .want { display: inline-flex; align-items: center; gap: 4px; font-size: 13px; }
+  .hit .want input { width: 52px; padding: 3px 6px; }
+  .filter-tabs { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 12px; }
+  .ftab { display: inline-flex; align-items: center; gap: 6px; padding: 5px 12px; border-radius: 999px; font-size: 13px; }
+  .ftab[aria-pressed="true"] { border-color: var(--accent); background: var(--accent-soft); color: var(--accent); font-weight: 600; }
+  .ftab.add { border-style: dashed; color: var(--muted); }
+  .ftab .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--line); }
+  .ftab .dot.on { background: var(--ok); }
+
+  .members { margin: 0 0 10px; }
+  .member { display: inline-flex; align-items: center; gap: 4px; font-size: 13px; }
+  .member input { width: 56px; padding: 3px 6px; }
+  .book-bar { padding: 8px 12px; border-radius: 8px; margin-bottom: 8px; font-size: 13px; background: var(--accent-soft); color: var(--accent); font-weight: 600; }
+  .book-bar.err { background: var(--err-soft); color: var(--err); }
+
+  .toast { position: fixed; bottom: 20px; left: 50%; transform: translateX(-50%) translateY(20px); opacity: 0; transition: .2s;
+    background: var(--text); color: var(--bg); padding: 9px 16px; border-radius: 8px; pointer-events: none; z-index: 10; max-width: calc(100% - 32px); }
+  .toast.show { opacity: 1; transform: translateX(-50%) translateY(0); }
+  .toast.err { background: var(--err); color: #fff; }
+</style>
+</head>
+<body>
+<header>
+  <h1>臺大場地預約控制台</h1>
+  <span id="acctPill" class="pill warn">尚未設定帳號</span>
+  <span id="sessionPill" class="pill warn">網站未登入</span>
+  <button type="button" class="small" id="loginBtn">登入網站</button>
+  <button type="button" class="small ghost" id="logoutBtn">清除登入</button>
+  <span class="spacer"></span>
+  <span class="clock"><small>現在時間</small><span id="clock">--</span></span>
+</header>
+
+<main>
+  <section class="card wide">
+    <div class="tabs" role="tablist">
+      <button type="button" role="tab" class="tab" data-tab="search" aria-selected="true">可租時段搜尋</button>
+      <button type="button" role="tab" class="tab" data-tab="filter" aria-selected="false">機器人預訂</button>
+      <button type="button" role="tab" class="tab" data-tab="heat" aria-selected="false">歷史熱門度</button>
+    </div>
+
+    <div class="tabpanel" id="panel-search">
+      <p class="hint tab-hint">一次查詢今天到 7 天後每個時段還有幾面空場。租借日前 3 天起只能線上申請；3 天內的空場要到綜合體育館櫃台現場租借。</p>
+      <div class="toolbar">
+        <div class="group"><span class="label">場地（可複選）</span><span id="searchVenues" class="group"></span></div>
+        <button type="button" class="small primary" id="searchBtn">搜尋</button>
+        <button type="button" class="small" id="searchForce" title="不使用快取，重新向網站抓取">重新抓取</button>
+        <span class="hint" id="cacheHint" style="margin:0"></span>
+      </div>
+      <div class="toolbar" id="searchViewBar" hidden>
+        <div class="group"><span class="label">顯示</span><span id="searchView" class="group"></span></div>
+        <span class="hint" id="searchMeta" style="margin:0"></span>
+      </div>
+      <div class="grid-wrap" style="position:relative">
+        <table class="week avail" id="avail"></table>
+        <div class="tip" id="availTip" hidden></div>
+      </div>
+      <div class="legend">
+        <span><i class="sw" style="background:var(--ok)"></i>線上可租（幾面）</span>
+        <span><i class="sw" style="background:var(--warn-soft);border:1px solid var(--warn)"></i>僅限現場租借（幾面）</span>
+        <span><i></i>已滿或不開放</span>
+        <span><i class="closed"></i>場館未開放</span>
+      </div>
+      <details class="fold"><summary id="availSummary">時段清單</summary><div class="hot-list" id="availList"></div></details>
+    </div>
+
+    <div class="tabpanel" id="panel-filter" hidden>
+    <p class="hint tab-hint">伺服器開著時，機器人會在背景定期查詢「已啟用」濾網用到的場地（和可租時段搜尋共用同一份資料與快取），符合時段的線上空位會自動加入下方清單。不會自動下單。</p>
+
+    <div class="scanbar">
+      <span><span class="k">狀態</span> <span class="v" id="robotStatus">—</span></span>
+      <span><span class="k">上次掃描</span> <span class="v" id="lastScan">—</span></span>
+      <span><span class="k">下次掃描</span> <span class="v" id="nextScan">—</span></span>
+      <span class="err" id="scanError"></span>
+      <span class="push">
+        <span class="k">每</span><select id="interval" class="compact"></select><span class="k">掃描一次</span>
+        <button type="button" class="small" id="scanBtn">立即掃描</button>
+      </span>
+    </div>
+
+    <h3 class="sub">自動加入的清單 <span class="count" id="hitCount"></span>
+      <button type="button" class="small ghost right" id="clearGone">清除已失效</button></h3>
+    <div class="toolbar members">
+      <span class="label">預訂人數（按「立即預訂」時自動填入，羽球等場地至少 2 人）</span>
+      <span class="group" id="members"></span>
+    </div>
+    <div class="book-bar" id="bookBar" hidden></div>
+    <div class="hits" id="hits"></div>
+
+    <h3 class="sub">濾網 <span class="count">每個濾網是一組「場地＋時段」，可以分別啟用</span></h3>
+    <div class="filter-tabs" id="filterTabs"></div>
+    <div id="filterEditor" hidden>
+      <div class="toolbar">
+        <div class="group"><span class="label">名稱</span><input id="fName" type="text" class="compact" maxlength="30"></div>
+        <label class="switch"><input type="checkbox" id="watchEnabled"><span class="track"></span><span id="watchLabel">已停用</span></label>
+        <button type="button" class="small danger" id="fDelete">刪除濾網</button>
+      </div>
+      <div class="toolbar">
+        <div class="group"><span class="label">場地</span><span id="watchVenues" class="group"></span></div>
+        <div class="group"><span class="label">快速選取</span>
+          <button type="button" class="small" data-preset="weeknight">平日晚上</button>
+          <button type="button" class="small" data-preset="weekend">週末白天</button>
+          <button type="button" class="small" data-preset="clear">全部清除</button>
+        </div>
+      </div>
+      <div class="grid-wrap"><table class="week" id="week"></table></div>
+      <div class="legend">
+        <span><i class="sel"></i>這個濾網的時段</span>
+        <span><i class="open"></i>目前線上有空（幾面）</span>
+        <span><i></i>未選</span>
+        <span><i class="closed"></i>場館未開放</span>
+        <span>日期顯示藍色＝目前可線上申請（租借日前 3–7 天）</span>
+      </div>
+    </div>
+    <div class="empty" id="filterEmpty" hidden>還沒有濾網，按「＋ 新增濾網」建立一組場地和時段</div>
+    </div>
+    <div class="tabpanel" id="panel-heat" hidden>
+      <p class="hint tab-hint">每格的百分比＝過去這個時段有開放線上租借時，被訂走的比例；顏色越深越難訂。點格子可直接加入或移出<b id="heatFilterName">目前選取的濾網</b>的時段。</p>
+      <div class="toolbar">
+        <div class="group"><span class="label">場地</span><select id="heatVenue" class="compact"></select></div>
+        <div class="group"><span class="label">統計起始日</span><input id="heatSince" type="date" class="compact"></div>
+        <button type="button" class="small" id="heatRefresh">更新歷史資料</button>
+        <span class="hint" id="heatMeta" style="margin:0"></span>
+      </div>
+      <div class="grid-wrap" style="position:relative">
+        <table class="week heat" id="heat"></table>
+        <div class="tip" id="heatTip" hidden></div>
+      </div>
+      <div class="legend" id="heatLegend"></div>
+      <details class="fold"><summary>最難訂／最好訂排行</summary><div class="hot-list" id="hotList"></div></details>
+    </div>
+  </section>
+
+  <div class="col">
+    <section class="card">
+      <h2>帳號設定</h2>
+      <form id="credForm" autocomplete="off">
+        <label class="field"><span>帳號（電子信箱）</span>
+          <input id="username" type="text" placeholder="例：b12345678@ntu.edu.tw">
+        </label>
+        <label class="field"><span>密碼</span>
+          <div class="pw-wrap">
+            <input id="password" type="password" placeholder="請輸入密碼">
+            <button type="button" class="ghost" id="togglePw">顯示</button>
+          </div>
+        </label>
+        <div class="actions">
+          <button type="submit" class="primary">儲存</button>
+          <button type="button" class="danger" id="deleteCred">刪除已存資料</button>
+        </div>
+        <p class="hint">密碼以 Windows DPAPI 加密存在本機，只有這台電腦的這個 Windows 帳號能解開。登入時的確認碼仍需手動輸入。</p>
+      </form>
+    </section>
+
+    <section class="card" hidden><!-- 新增預約：暫時收起，程式碼保留給之後的自動訂場 -->
+      <h2>新增預約</h2>
+      <form id="taskForm">
+        <div class="venues" id="venues"></div>
+        <div class="row">
+          <label class="field"><span>租借日期</span><input id="date" type="date" required></label>
+          <label class="field"><span>開始時間</span><select id="startHour"></select></label>
+        </div>
+        <div class="row">
+          <label class="field"><span>使用時數</span>
+            <select id="hours"><option value="1">1 小時</option><option value="2" selected>2 小時</option><option value="3">3 小時</option><option value="4">4 小時</option></select>
+          </label>
+          <label class="field"><span>開搶時間</span><input id="openAt" type="datetime-local" required></label>
+        </div>
+        <label class="field"><span>備註（選填）</span><input id="note" type="text" maxlength="100" placeholder="例：社團練球"></label>
+        <div class="summary" id="summary"></div>
+        <div class="actions"><button type="submit" class="primary">加入預約清單</button></div>
+      </form>
+    </section>
+
+    <section class="card">
+      <h2>租借規定重點</h2>
+      <ul class="rules">
+        <li>球類場地須於租借日<b>前 7 天至前 3 天</b>提出申請。</li>
+        <li>申請成功後須在租借日<b>前 2 天以前繳費</b>，逾期視為放棄。</li>
+        <li>一年內借了沒用、也沒取消達 <b>3 次</b>，一年內不得再借綜合體育館球場。</li>
+        <li>會員證不得供他人使用；違反細則者可能一年內不得租借。</li>
+      </ul>
+      <p class="hint">依《校總區運動場館管理辦法實施細則》（115.04.30 發布）整理，每日開放申請的確切時刻未載明。</p>
+    </section>
+  </div>
+
+  <div class="col">
+    <section class="card" hidden><!-- 預約清單：暫時收起 -->
+      <h2>預約清單 <span class="count" id="taskCount"></span></h2>
+      <div class="tasks" id="tasks"></div>
+    </section>
+
+    <section class="card">
+      <h2>執行紀錄 <button class="ghost right" id="clearLogView" type="button">清除畫面</button></h2>
+      <div class="logs" id="logs"></div>
+    </section>
+  </div>
+</main>
+
+<div class="toast" id="toast"></div>
+
+<script>
+const $ = (id) => document.getElementById(id);
+const WEEK = ["日", "一", "二", "三", "四", "五", "六"];
+let venues = [];
+let tasks = [];
+let logCutoff = 0;
+
+const pad = (n) => String(n).padStart(2, "0");
+const ymd = (d) => `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
+const parseDate = (s) => { const [y, m, d] = s.split("-").map(Number); return new Date(y, m - 1, d); };
+const fmtDate = (s) => { const d = parseDate(s); return `${d.getMonth() + 1}/${d.getDate()}（${WEEK[d.getDay()]}）`; };
+const venueName = (id) => { const v = venues.find((v) => v.id === id); return v ? `${v.name}（${v.sport}）` : id; };
+const timeRange = (start, hours) => `${pad(start)}:00 – ${pad(start + hours)}:00`;
+
+function toast(msg, isErr = false) {
+  const t = $("toast");
+  t.textContent = msg;
+  t.className = "toast show" + (isErr ? " err" : "");
+  clearTimeout(toast.timer);
+  toast.timer = setTimeout(() => (t.className = "toast"), 2600);
+}
+
+async function api(path, opts = {}) {
+  const res = await fetch(path, { headers: { "Content-Type": "application/json" }, ...opts });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(data.error || `HTTP ${res.status}`);
+  return data;
+}
+
+/* ---------- clock ---------- */
+function tick() {
+  const n = new Date();
+  $("clock").textContent = `${ymd(n)} ${pad(n.getHours())}:${pad(n.getMinutes())}:${pad(n.getSeconds())}`;
+  renderCountdowns();
+}
+
+/* ---------- credentials ---------- */
+async function loadCred() {
+  const c = await api("/api/credentials");
+  $("username").value = c.username || "";
+  $("password").value = "";
+  $("password").placeholder = c.has_password ? "已儲存（留空則不變更）" : "請輸入密碼";
+  const pill = $("acctPill");
+  if (c.error) { pill.className = "pill err"; pill.textContent = c.error; }
+  else if (c.has_password) { pill.className = "pill ok"; pill.textContent = `帳號：${c.username}`; }
+  else { pill.className = "pill warn"; pill.textContent = "尚未設定帳號"; }
+}
+
+$("togglePw").onclick = () => {
+  const p = $("password");
+  p.type = p.type === "password" ? "text" : "password";
+  $("togglePw").textContent = p.type === "password" ? "顯示" : "隱藏";
+};
+
+$("credForm").onsubmit = async (e) => {
+  e.preventDefault();
+  try {
+    await api("/api/credentials", { method: "POST", body: JSON.stringify({ username: $("username").value, password: $("password").value }) });
+    toast("帳號已儲存");
+    await loadCred();
+    refreshLogs();
+  } catch (err) { toast(err.message, true); }
+};
+
+$("deleteCred").onclick = async () => {
+  if (!confirm("確定要刪除已儲存的帳號密碼？")) return;
+  await api("/api/credentials", { method: "DELETE" });
+  toast("已刪除");
+  loadCred();
+  refreshLogs();
+};
+
+/* ---------- new task form ---------- */
+function renderVenues() {
+  $("venues").innerHTML = venues.map((v, i) => `
+    <label class="venue"><input type="radio" name="venue" value="${v.id}" ${i === 0 ? "checked" : ""}>
+      <span><b>${v.name}</b><em>${v.sport}</em></span></label>`).join("");
+  $("venues").onchange = updateSummary;
+}
+
+function fillHours() {
+  const sel = $("startHour");
+  for (let h = 6; h <= 21; h++) sel.add(new Option(`${pad(h)}:00`, h, false, h === 18));
+}
+
+function maxHoursFor(start) { return Math.min(4, 22 - start); }
+
+function syncHours() {
+  const max = maxHoursFor(Number($("startHour").value));
+  [...$("hours").options].forEach((o) => (o.disabled = Number(o.value) > max));
+  if (Number($("hours").value) > max) $("hours").value = String(max);
+}
+
+// Default open time: 00:00 seven days before the booking date (the earliest the rules allow).
+function defaultOpenAt() {
+  if (!$("date").value) return;
+  const d = parseDate($("date").value);
+  d.setDate(d.getDate() - 7);
+  $("openAt").value = `${ymd(d)}T00:00`;
+}
+
+function updateSummary() {
+  const v = document.querySelector('input[name="venue"]:checked');
+  const date = $("date").value;
+  if (!v || !date) { $("summary").textContent = "請選擇場地與日期"; return; }
+  const start = Number($("startHour").value), hours = Number($("hours").value);
+  const lead = Math.round((parseDate(date) - new Date(new Date().toDateString())) / 86400000);
+  let warn = "";
+  if (lead < 3) warn = "<br>⚠ 距今不足 3 天，依規定已無法線上申請";
+  else if (lead > 7) warn = "<br>需等開搶時間到才能申請";
+  $("summary").innerHTML = `預約 <b>${venueName(v.value)}</b><br>${fmtDate(date)} ${timeRange(start, hours)}，共 ${hours} 小時${warn}`;
+}
+
+$("date").onchange = () => { defaultOpenAt(); updateSummary(); };
+$("startHour").onchange = () => { syncHours(); updateSummary(); };
+$("hours").onchange = updateSummary;
+
+$("taskForm").onsubmit = async (e) => {
+  e.preventDefault();
+  const v = document.querySelector('input[name="venue"]:checked');
+  try {
+    await api("/api/tasks", { method: "POST", body: JSON.stringify({
+      venue: v && v.value, date: $("date").value, start_hour: $("startHour").value,
+      hours: $("hours").value, open_at: $("openAt").value, note: $("note").value,
+    }) });
+    toast("已加入預約清單");
+    $("note").value = "";
+    refreshTasks();
+    refreshLogs();
+  } catch (err) { toast(err.message, true); }
+};
+
+/* ---------- task list ---------- */
+const STATUS = {
+  pending: ["info", "等待開搶"], running: ["warn", "執行中"],
+  success: ["ok", "已訂到"], failed: ["err", "失敗"],
+};
+
+function countdown(openAt) {
+  const diff = new Date(openAt) - new Date();
+  if (diff <= 0) return "已到開搶時間";
+  const s = Math.floor(diff / 1000), d = Math.floor(s / 86400);
+  const hms = `${pad(Math.floor(s / 3600) % 24)}:${pad(Math.floor(s / 60) % 60)}:${pad(s % 60)}`;
+  return `倒數 ${d ? d + " 天 " : ""}${hms}`;
+}
+
+function renderTasks() {
+  $("taskCount").textContent = tasks.length ? `${tasks.length} 筆` : "";
+  if (!tasks.length) { $("tasks").innerHTML = '<div class="empty">尚無預約任務，從左側新增一筆</div>'; return; }
+  const sorted = [...tasks].sort((a, b) => a.open_at.localeCompare(b.open_at));
+  $("tasks").innerHTML = sorted.map((t) => {
+    let [cls, label] = STATUS[t.status] || ["info", t.status];
+    if (t.status === "pending" && new Date(t.open_at) <= new Date()) [cls, label] = ["warn", "已開放申請"];
+    const open = t.open_at.replace("T", " ");
+    return `<div class="task">
+      <div><div class="title">${venueName(t.venue)}</div>
+        <div>${fmtDate(t.date)} ${timeRange(t.start_hour, t.hours)}</div></div>
+      <div class="side"><span class="pill ${cls}">${label}</span>
+        <div class="actions">
+          <button type="button" disabled title="自動訂場尚未實作，按了也不會送出任何訂單">自動訂場（未實作）</button>
+          <button type="button" class="danger" data-del="${t.id}">刪除</button>
+        </div></div>
+      <div class="meta">開搶 ${open}・<span class="when" data-countdown="${t.open_at}"></span>${t.note ? "・" + escapeHtml(t.note) : ""}</div>
+    </div>`;
+  }).join("");
+  renderCountdowns();
+}
+
+function renderCountdowns() {
+  document.querySelectorAll("[data-countdown]").forEach((el) => (el.textContent = countdown(el.dataset.countdown)));
+}
+
+function escapeHtml(s) { return s.replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c])); }
+
+$("tasks").onclick = async (e) => {
+  const del = e.target.dataset.del, run = e.target.dataset.run;
+  try {
+    if (del && confirm("確定刪除這筆預約任務？")) { await api(`/api/tasks/${del}`, { method: "DELETE" }); toast("已刪除"); refreshTasks(); }
+    if (run) await api(`/api/tasks/${run}/run`, { method: "POST" });
+  } catch (err) { toast(err.message, true); }
+  refreshLogs();
+};
+
+async function refreshTasks() { tasks = await api("/api/tasks"); renderTasks(); }
+
+/* ---------- logs ---------- */
+async function refreshLogs() {
+  const logs = await api("/api/logs");
+  const box = $("logs");
+  const atBottom = box.scrollHeight - box.scrollTop - box.clientHeight < 20;
+  const shown = logs.slice(logCutoff);
+  box.innerHTML = shown.length
+    ? shown.map((l) => `<div class="${l.level}"><time>${l.time.slice(5)}</time><span>${escapeHtml(l.msg)}</span></div>`).join("")
+    : '<div style="color:var(--muted)">目前沒有紀錄</div>';
+  if (atBottom) box.scrollTop = box.scrollHeight;
+  refreshLogs.total = logs.length;
+}
+$("clearLogView").onclick = () => { logCutoff = refreshLogs.total || 0; refreshLogs(); };
+
+/* ---------- robot: filters (weekly timetables) + auto hit list ---------- */
+const DAY_LABELS = ["週一", "週二", "週三", "週四", "週五", "週六", "週日"]; // index = Python weekday
+const HOURS = Array.from({ length: 16 }, (_, i) => i + 6); // 06:00 – 21:00 start hours
+const EMPTY_FILTER = { id: null, name: "", enabled: false, venues: [], slots: {} };
+let robotData = { state: {}, filters: [], hits: [] };
+let watch = EMPTY_FILTER; // the filter being edited (heatmap clicks also edit this one)
+let openHours = {};
+let bookDates = {}; // weekday -> ISO date currently inside the online booking window
+let paint = null; // true = selecting, false = clearing, null = not dragging
+let saveTimer = null;
+let lastScanSeen = null;
+
+const pyWeekday = (iso) => (parseDate(iso).getDay() + 6) % 7;
+const isOpenHour = (wd, h) => (openHours[wd] || []).includes(h);
+const isSel = (wd, h) => (watch.slots[wd] || []).includes(h);
+const fmtTime = (iso) => (iso ? iso.replace("T", " ").slice(5, 16) : "—");
+const filterName = (id) => (robotData.filters.find((f) => f.id === id) || {}).name || "（已刪除）";
+
+function setSel(wd, h, on) {
+  if (!watch.id || !isOpenHour(wd, h)) return;
+  const set = new Set(watch.slots[wd] || []);
+  on ? set.add(h) : set.delete(h);
+  if (set.size) watch.slots[wd] = [...set].sort((a, b) => a - b); else delete watch.slots[wd];
+}
+
+// Debounced save of the filter being edited. The local copy stays authoritative while editing.
+function saveWatch() {
+  if (!watch.id) return;
+  const f = watch;
+  clearTimeout(saveTimer);
+  saveTimer = setTimeout(async () => {
+    try { await api(`/api/robot/filters/${f.id}`, { method: "POST", body: JSON.stringify(f) }); renderFilterTabs(); refreshLogs(); }
+    catch (err) { toast(err.message, true); }
+  }, 350);
+}
+
+// Online-open court count for this filter's venues on the weekday's bookable date (from the shared search results).
+function openCountFor(wd, h) {
+  const day = bookDates[wd];
+  if (!day) return null;
+  let n = 0, seen = false;
+  for (const v of watch.venues) {
+    const c = searchResults[v] && searchResults[v].cells[`${day}|${h}`];
+    if (c) { seen = true; n += c.open; }
+  }
+  return seen ? n : null;
+}
+
+function renderWeek() {
+  const head = DAY_LABELS.map((label, wd) => {
+    const d = bookDates[wd];
+    const sub = d ? `${parseDate(d).getMonth() + 1}/${parseDate(d).getDate()}` : "尚未開放";
+    return `<th data-col="${wd}" class="${d ? "bookable" : ""}" title="點擊切換整天">${label}<small>${sub}</small></th>`;
+  }).join("");
+  const body = HOURS.map((h) => `<tr><th data-row="${h}" title="點擊切換整列">${pad(h)}:00</th>${
+    DAY_LABELS.map((_, wd) => {
+      if (!isOpenHour(wd, h)) return `<td class="closed" title="場館未開放"></td>`;
+      const sel = isSel(wd, h), n = sel ? openCountFor(wd, h) : null;
+      const cls = [sel ? "sel" : "", n > 0 ? "r-open" : n === 0 ? "r-full" : ""].join(" ").trim();
+      const txt = n > 0 ? `有空 ${n}` : n === 0 ? "滿" : "";
+      return `<td data-wd="${wd}" data-h="${h}" class="${cls}" title="${DAY_LABELS[wd]} ${pad(h)}:00–${pad(h + 1)}:00">${txt}</td>`;
+    }).join("")}</tr>`).join("");
+  $("week").innerHTML = `<thead><tr><th></th>${head}</tr></thead><tbody>${body}</tbody>`;
+}
+
+function renderFilterTabs() {
+  $("filterTabs").innerHTML = robotData.filters.map((f) => `
+    <button type="button" class="ftab" data-fid="${f.id}" aria-pressed="${f.id === watch.id}">
+      <span class="dot ${f.enabled ? "on" : ""}"></span>${escapeHtml(f.name)}</button>`).join("") +
+    `<button type="button" class="ftab add" id="fAdd">＋ 新增濾網</button>`;
+}
+
+function renderFilterEditor() {
+  const has = !!watch.id;
+  $("filterEditor").hidden = !has;
+  $("filterEmpty").hidden = has || robotData.filters.length > 0;
+  if (!has) return;
+  if (document.activeElement !== $("fName")) $("fName").value = watch.name;
+  $("watchVenues").innerHTML = venues.map((v) => `
+    <label class="chip"><input type="checkbox" value="${v.id}" ${watch.venues.includes(v.id) ? "checked" : ""}>
+      <span>${v.name}・${v.sport}</span></label>`).join("");
+  $("watchEnabled").checked = watch.enabled;
+  $("watchLabel").textContent = watch.enabled ? "啟用中" : "已停用";
+  renderWeek();
+}
+
+function selectFilter(id) {
+  watch = robotData.filters.find((f) => f.id === id) || robotData.filters[0] || EMPTY_FILTER;
+  try { localStorage.setItem("filter", watch.id || ""); } catch (e) {}
+  $("fName").value = watch.name;
+  renderFilterTabs(); renderFilterEditor();
+  if (!$("panel-heat").hidden) renderHeat();
+}
+
+function renderRobotState() {
+  const r = robotData, st = r.state || {};
+  const pill = $("sessionPill");
+  if (r.login_in_progress) { pill.className = "pill warn"; pill.textContent = "登入視窗開啟中"; }
+  else if (r.has_session) { pill.className = "pill ok"; pill.textContent = "網站已登入"; }
+  else { pill.className = "pill warn"; pill.textContent = "網站未登入"; }
+  $("loginBtn").disabled = !!r.login_in_progress;
+
+  const active = r.filters.filter((f) => f.enabled && f.venues.length && Object.keys(f.slots).length).length;
+  $("robotStatus").textContent = st.running
+    ? `掃描中 ${vShort(st.venue || "")} ${st.done || 0}/${st.total || "?"}`
+    : active ? `運作中（${active} 個濾網啟用）` : "待命（沒有啟用的濾網）";
+  $("lastScan").textContent = fmtTime(st.last_scan);
+  const left = st.next_scan ? new Date(st.next_scan) - new Date() : 0;
+  $("nextScan").textContent = !st.next_scan ? "—"
+    : left <= 0 ? `${fmtTime(st.next_scan)}（即將開始）`
+    : `${fmtTime(st.next_scan)}（${countdown(st.next_scan).replace("倒數 ", "")}）`;
+  $("scanError").textContent = st.error || "";
+  if (document.activeElement !== $("interval")) $("interval").value = String(r.interval_min);
+}
+
+function renderHits() {
+  const hits = robotData.hits;
+  const avail = hits.filter((h) => h.status === "available");
+  $("hitCount").textContent = hits.length ? `可訂 ${avail.length} 筆${hits.length > avail.length ? `・已失效 ${hits.length - avail.length} 筆` : ""}` : "";
+  $("clearGone").hidden = hits.length === avail.length;
+  document.title = avail.length ? `(${avail.length}) 有空位！臺大場地預約控制台` : "臺大場地預約控制台";
+  // Don't rebuild the rows while a quantity box is being edited (the 2 s poll would steal focus).
+  if (document.activeElement && document.activeElement.matches("#hits input[data-want]")) return;
+  const sorted = [...avail, ...hits.filter((h) => h.status !== "available")];
+  const busy = robotData.book_job && robotData.book_job.running;
+  $("hits").innerHTML = sorted.length ? sorted.map((h) => `
+    <div class="hit ${h.status}">
+      <span class="pill ${h.status === "available" ? "ok" : "warn"}">${h.status === "available" ? "可訂" : "已沒了"}</span>
+      <b>${fmtDate(h.date)} ${timeRange(h.hour, 1)}</b>
+      <span>${venueName(h.venue)}${h.status === "available" ? `・線上 ${h.count} 面` : ""}</span>
+      ${(h.filters || []).map((fid) => `<span class="tag">${escapeHtml(filterName(fid))}</span>`).join("")}
+      <span class="when">${h.status === "available" ? `發現於 ${fmtTime(h.first_seen)}` : `${fmtTime(h.gone_at)} 失效`}</span>
+      <span class="acts">
+      ${h.status === "available" ? `<label class="want">預訂
+        <input type="number" min="1" max="${h.count}" value="${Math.min(h.want || 1, h.count)}" data-want="${h.id}" ${busy ? "disabled" : ""}>
+        面</label>
+        <button type="button" class="small primary" data-book="${h.id}" ${busy ? "disabled" : ""}>立即預訂</button>` : ""}
+      <button type="button" class="small ghost" data-dismiss="${h.id}" title="從清單移除">✕</button>
+      </span>
+    </div>`).join("") : '<div class="empty">目前沒有符合濾網的空位。機器人掃到時會自動加到這裡。</div>';
+}
+
+$("week").addEventListener("pointerdown", (e) => {
+  if (!watch.id) return;
+  const td = e.target.closest("td[data-wd]");
+  const th = e.target.closest("th[data-col], th[data-row]");
+  if (td) {
+    const wd = td.dataset.wd, h = Number(td.dataset.h);
+    paint = !isSel(wd, h);
+    setSel(wd, h, paint);
+    renderWeek();
+  } else if (th && th.dataset.col !== undefined) {
+    const wd = th.dataset.col, hours = openHours[wd] || [];
+    const on = !hours.every((h) => isSel(wd, h));
+    hours.forEach((h) => setSel(wd, h, on));
+    renderWeek(); saveWatch();
+  } else if (th && th.dataset.row !== undefined) {
+    const h = Number(th.dataset.row), days = DAY_LABELS.map((_, wd) => String(wd)).filter((wd) => isOpenHour(wd, h));
+    const on = !days.every((wd) => isSel(wd, h));
+    days.forEach((wd) => setSel(wd, h, on));
+    renderWeek(); saveWatch();
+  }
+});
+$("week").addEventListener("pointerover", (e) => {
+  if (paint === null) return;
+  if (!(e.buttons & 1)) { paint = null; saveWatch(); return; } // pointerup was missed (e.g. released outside the window)
+  const td = e.target.closest("td[data-wd]");
+  if (td && isSel(td.dataset.wd, Number(td.dataset.h)) !== paint) { setSel(td.dataset.wd, Number(td.dataset.h), paint); renderWeek(); }
+});
+window.addEventListener("pointerup", () => { if (paint !== null) { paint = null; saveWatch(); } });
+
+document.querySelectorAll("[data-preset]").forEach((b) => (b.onclick = () => {
+  const p = b.dataset.preset;
+  if (p === "clear") watch.slots = {};
+  if (p === "weeknight") [0, 1, 2, 3, 4].forEach((wd) => [18, 19, 20, 21].forEach((h) => setSel(String(wd), h, true)));
+  if (p === "weekend") [5, 6].forEach((wd) => [9, 10, 11, 12, 13, 14, 15, 16, 17].forEach((h) => setSel(String(wd), h, true)));
+  renderWeek(); saveWatch();
+}));
+
+$("watchVenues").onchange = () => {
+  watch.venues = [...$("watchVenues").querySelectorAll("input:checked")].map((i) => i.value);
+  renderWeek(); saveWatch();
+};
+$("fName").oninput = () => { watch.name = $("fName").value; saveWatch(); };
+$("watchEnabled").onchange = () => {
+  if ($("watchEnabled").checked) {
+    if (!Object.keys(watch.slots).length) { toast("請先在時間表選取時段", true); $("watchEnabled").checked = false; return; }
+    if (!watch.venues.length) { toast("請至少選一個場地", true); $("watchEnabled").checked = false; return; }
+  }
+  watch.enabled = $("watchEnabled").checked;
+  $("watchLabel").textContent = watch.enabled ? "啟用中" : "已停用";
+  saveWatch();
+};
+
+$("filterTabs").onclick = async (e) => {
+  const tab = e.target.closest("button");
+  if (!tab) return;
+  if (tab.id === "fAdd") {
+    try {
+      const f = await api("/api/robot/filters", { method: "POST", body: JSON.stringify({
+        name: `濾網 ${robotData.filters.length + 1}`, enabled: false, venues: [searchSel[0] || venues[0].id], slots: {},
+      }) });
+      robotData.filters.push(f);
+      selectFilter(f.id);
+      $("fName").focus(); $("fName").select();
+    } catch (err) { toast(err.message, true); }
+    refreshLogs();
+  } else if (tab.dataset.fid) selectFilter(tab.dataset.fid);
+};
+$("fDelete").onclick = async () => {
+  if (!watch.id || !confirm(`確定刪除濾網「${watch.name}」？它自動加入清單的項目也會一起移除。`)) return;
+  clearTimeout(saveTimer);
+  await api(`/api/robot/filters/${watch.id}`, { method: "DELETE" });
+  robotData.filters = robotData.filters.filter((f) => f.id !== watch.id);
+  selectFilter(null);
+  refreshRobot(); refreshLogs();
+};
+
+$("interval").onchange = async () => {
+  await api("/api/robot/settings", { method: "POST", body: JSON.stringify({ interval_min: Number($("interval").value) }) });
+  toast(`改為每 ${$("interval").value} 分鐘掃描一次（下一輪起生效）`);
+};
+$("scanBtn").onclick = async () => { await api("/api/robot/scan", { method: "POST" }); toast("已開始掃描"); refreshRobot(); refreshLogs(); };
+$("hits").onclick = async (e) => {
+  const book = e.target.dataset.book, dismiss = e.target.dataset.dismiss;
+  if (book) {
+    try {
+      await api(`/api/robot/hits/${book}/book`, { method: "POST" });
+      toast("正在開啟 Edge 預訂視窗…");
+    } catch (err) { toast(err.message, true); }
+    refreshRobot(); refreshLogs();
+  } else if (dismiss) {
+    await api(`/api/robot/hits/${dismiss}/dismiss`, { method: "POST" });
+    refreshRobot();
+  }
+};
+
+$("hits").addEventListener("change", async (e) => {
+  const input = e.target.closest("input[data-want]");
+  if (!input) return;
+  const max = Number(input.max), n = Math.round(Number(input.value));
+  if (!(n >= 1 && n <= max)) {
+    toast(`數量需介於 1 到 ${max} 面（目前可借場數）`, true);
+    input.value = String(Math.min(Math.max(1, n || 1), max));
+  }
+  try {
+    const r = await api(`/api/robot/hits/${input.dataset.want}/want`, { method: "POST", body: JSON.stringify({ want: Number(input.value) }) });
+    const hit = robotData.hits.find((h) => h.id === input.dataset.want);
+    if (hit) hit.want = r.want;
+  } catch (err) { toast(err.message, true); }
+  input.blur();
+  renderHits();
+});
+
+function renderMembers() {
+  const m = robotData.members || {};
+  $("members").innerHTML = Object.entries(robotData.member_types || {}).map(([t, label]) => `
+    <label class="member">${label}<input type="number" min="0" max="10" data-mt="${t}" value="${m[t] || 0}"></label>`).join("");
+}
+$("members").onchange = async () => {
+  const members = {};
+  $("members").querySelectorAll("input[data-mt]").forEach((i) => (members[i.dataset.mt] = Number(i.value) || 0));
+  try { await api("/api/robot/settings", { method: "POST", body: JSON.stringify({ members }) }); robotData.members = members; toast("已更新預訂人數"); }
+  catch (err) { toast(err.message, true); renderMembers(); }
+};
+
+function renderBookJob() {
+  const j = robotData.book_job || {};
+  const bar = $("bookBar");
+  bar.hidden = !j.running && !j.error;
+  bar.className = "book-bar" + (j.error ? " err" : "");
+  bar.textContent = j.running ? `預訂進行中：${j.message}（完成後關閉 Edge 視窗即可）` : j.error ? `上一次預訂：${j.error}` : "";
+}
+$("clearGone").onclick = async () => { await api("/api/robot/hits", { method: "DELETE" }); refreshRobot(); };
+
+$("loginBtn").onclick = async () => {
+  try { await api("/api/session/login", { method: "POST" }); toast("已開啟 Edge，請輸入確認碼後登入"); }
+  catch (err) { toast(err.message, true); }
+  refreshRobot(); refreshLogs();
+};
+$("logoutBtn").onclick = async () => { await api("/api/session", { method: "DELETE" }); refreshRobot(); refreshLogs(); };
+
+// Polled every 2 s. Filters come from the server only on first load; afterwards the local copy is
+// the one being edited, so only state, hits and settings are refreshed here.
+async function refreshRobot(first = false) {
+  const r = await api("/api/robot");
+  if (first) {
+    openHours = r.open_hours;
+    $("interval").innerHTML = [3, 5, 10, 15, 30, 60].filter((m) => m >= r.min_interval).map((m) => `<option value="${m}">${m} 分鐘</option>`).join("");
+  } else {
+    r.filters = robotData.filters;
+  }
+  bookDates = {};
+  r.online_dates.forEach((d) => (bookDates[pyWeekday(d)] = d));
+  robotData = r;
+  renderRobotState();
+  renderHits();
+  renderBookJob();
+  if (first) renderMembers();
+  if (r.state.last_scan !== lastScanSeen) {
+    // A robot round updates the shared search results too.
+    lastScanSeen = r.state.last_scan;
+    if (!first) { await loadSearch(); if (!$("panel-search").hidden) renderAvail(); }
+    if (!$("panel-filter").hidden) renderWeek();
+  }
+  if (first) {
+    let id = null;
+    try { id = localStorage.getItem("filter"); } catch (e) {}
+    selectFilter(id);
+  }
+}
+
+/* ---------- available-slot search ---------- */
+let searchResults = {};
+let searchJob = { running: false };
+let searchSel = [];       // venue ids ticked for the next search
+let searchView = "all";   // "all" = merged, or one venue id
+
+const ageText = (iso) => {
+  const m = Math.floor((new Date() - new Date(iso)) / 60000);
+  return m < 1 ? "剛剛" : m < 60 ? `${m} 分鐘前` : `${Math.floor(m / 60)} 小時前`;
+};
+const vShort = (id) => { const v = venues.find((v) => v.id === id); return v ? v.name : id; };
+
+// Venues whose results are on screen: ticked ones that have results, else any with results.
+function shownVenues() {
+  const have = venues.map((v) => v.id).filter((id) => searchResults[id]);
+  const ticked = have.filter((id) => searchSel.includes(id));
+  return ticked.length ? ticked : have;
+}
+
+function viewVenues() {
+  const shown = shownVenues();
+  return searchView !== "all" && shown.includes(searchView) ? [searchView] : shown;
+}
+
+// {open: [[venueId, count]...], onsite: [...], nOpen, nOnsite} for one date/hour in the current view.
+function availCell(day, h) {
+  const out = { open: [], onsite: [], nOpen: 0, nOnsite: 0 };
+  for (const id of viewVenues()) {
+    const c = searchResults[id].cells[`${day}|${h}`];
+    if (!c) continue;
+    if (c.open) { out.open.push([id, c.open]); out.nOpen += c.open; }
+    if (c.onsite) { out.onsite.push([id, c.onsite]); out.nOnsite += c.onsite; }
+  }
+  return out;
+}
+
+function saveSearchSel() { try { localStorage.setItem("searchSel", JSON.stringify(searchSel)); } catch (e) {} }
+
+function renderSearchVenues() {
+  $("searchVenues").innerHTML = venues.map((v) => `
+    <label class="chip"><input type="checkbox" value="${v.id}" ${searchSel.includes(v.id) ? "checked" : ""}>
+      <span>${v.name}・${v.sport}</span></label>`).join("");
+}
+$("searchVenues").onchange = () => {
+  searchSel = [...$("searchVenues").querySelectorAll("input:checked")].map((i) => i.value);
+  saveSearchSel();
+  renderAvail();
+};
+
+function renderSearchView() {
+  const shown = shownVenues();
+  $("searchViewBar").hidden = !shown.length;
+  if (!shown.includes(searchView)) searchView = "all";
+  const opts = (shown.length > 1 ? [["all", "全部合併"]] : []).concat(shown.map((id) => [id, vShort(id)]));
+  const current = shown.length === 1 ? shown[0] : searchView; // a single venue is shown as itself, without changing the choice
+  $("searchView").innerHTML = `<span class="seg">${opts.map(([id, label]) =>
+    `<button type="button" data-view="${id}" aria-pressed="${current === id}">${label}</button>`).join("")}</span>`;
+  $("searchMeta").textContent = "資料時間：" + shown.map((id) => `${vShort(id)} ${fmtTime(searchResults[id].generated)}（${ageText(searchResults[id].generated)}）`).join("、");
+}
+$("searchView").onclick = (e) => {
+  const id = e.target.dataset.view;
+  if (id) { searchView = id; renderAvail(); }
+};
+
+function renderAvail() {
+  renderSearchView();
+  const ids = viewVenues();
+  if (!ids.length) {
+    $("avail").innerHTML = `<tbody><tr><td class="never" style="height:120px">勾選場地後按「搜尋」（沒有快取時每個場地約 20–30 秒，需先登入網站）</td></tr></tbody>`;
+    $("availList").innerHTML = "";
+    $("availSummary").textContent = "時段清單";
+    return;
+  }
+  const base = searchResults[ids[0]];
+  const multi = ids.length > 1;
+  const head = base.dates.map((d) => {
+    const mode = d < base.online_from ? '<small class="site">現場</small>' : '<small class="online">線上</small>';
+    return `<th>${DAY_LABELS[pyWeekday(d)]} ${parseDate(d).getMonth() + 1}/${parseDate(d).getDate()}${mode}</th>`;
+  }).join("");
+  const body = HOURS.map((h) => `<tr><th>${pad(h)}:00</th>${base.dates.map((d) => {
+    if (!isOpenHour(pyWeekday(d), h)) return `<td class="closed"></td>`;
+    const c = availCell(d, h);
+    const where = (list) => (multi ? `<br><span style="font-weight:400">${list.map(([id]) => vShort(id)).join("・")}</span>` : "");
+    if (c.nOpen) return `<td class="on" data-d="${d}" data-h="${h}">線上 ${c.nOpen} 面${where(c.open)}</td>`;
+    if (c.nOnsite) return `<td class="site" data-d="${d}" data-h="${h}">現場 ${c.nOnsite} 面${where(c.onsite)}</td>`;
+    return `<td class="none" data-d="${d}" data-h="${h}">滿</td>`;
+  }).join("")}</tr>`).join("");
+  $("avail").innerHTML = `<thead><tr><th></th>${head}</tr></thead><tbody>${body}</tbody>`;
+
+  const list = (id, kind, title) => {
+    const res = searchResults[id], rows = [];
+    for (const d of res.dates) for (const h of HOURS) {
+      const c = res.cells[`${d}|${h}`];
+      const n = c ? c[kind] : 0;
+      if (n) rows.push(`<li>${fmtDate(d)} ${timeRange(h, 1)}：${n === res.courts ? `全部 ${n} 面` : `${n} 面`}</li>`);
+    }
+    totals[kind] += rows.length;
+    return `<div><b>${title}</b>${rows.length ? `<ol>${rows.join("")}</ol>` : '<p class="hint">沒有</p>'}</div>`;
+  };
+  const totals = { open: 0, onsite: 0 };
+  $("availList").innerHTML = ids.map((id) => `<div class="avail-venue">${multi ? `<b>${venueName(id)}</b>` : ""}
+    <div class="row">${list(id, "open", "線上可租")}${list(id, "onsite", "僅限現場租借")}</div></div>`).join("");
+  $("availSummary").textContent = `時段清單（線上可租 ${totals.open} 個、僅限現場 ${totals.onsite} 個時段）`;
+}
+
+$("avail").addEventListener("pointerover", (e) => {
+  const td = e.target.closest("td[data-d]"), tip = $("availTip");
+  if (!td || !viewVenues().length) { tip.hidden = true; return; }
+  const c = availCell(td.dataset.d, Number(td.dataset.h));
+  const lines = (list) => list.length
+    ? list.map(([id, n]) => `<div class="r"><span>${vShort(id)}</span><span>${n} 面</span></div>`).join("")
+    : '<div class="r"><span>—</span><span></span></div>';
+  tip.innerHTML = `<b>${fmtDate(td.dataset.d)} ${timeRange(Number(td.dataset.h), 1)}</b>
+    <div class="r"><span style="color:var(--ok);font-weight:600">線上可租</span><span></span></div>${lines(c.open)}
+    <div class="r"><span style="color:var(--warn);font-weight:600">僅限現場</span><span></span></div>${lines(c.onsite)}`;
+  const wrap = td.closest(".grid-wrap").getBoundingClientRect(), r = td.getBoundingClientRect();
+  tip.hidden = false;
+  let left = r.right - wrap.left + 8;
+  if (left + tip.offsetWidth > wrap.width) left = r.left - wrap.left - tip.offsetWidth - 8;
+  tip.style.left = `${Math.max(0, left)}px`;
+  tip.style.top = `${r.top - wrap.top}px`;
+});
+$("avail").addEventListener("pointerleave", () => ($("availTip").hidden = true));
+
+async function startSearch(force) {
+  if (!searchSel.length) { toast("請至少勾選一個場地", true); return; }
+  try {
+    await api("/api/search", { method: "POST", body: JSON.stringify({ venues: searchSel, force }) });
+    searchView = "all";
+    pollSearch();
+  } catch (err) { toast(err.message, true); }
+  refreshLogs();
+}
+$("searchBtn").onclick = () => startSearch(false);
+$("searchForce").onclick = () => startSearch(true);
+
+async function loadSearch() {
+  const r = await api("/api/search");
+  searchResults = r.results; searchJob = r.job;
+  const btn = $("searchBtn");
+  btn.disabled = $("searchForce").disabled = searchJob.running;
+  $("cacheHint").textContent = `${r.cache_minutes} 分鐘內查過的場地會直接用快取`;
+  const step = searchJob.venues && searchJob.venues.length > 1 ? `（${searchJob.step}/${searchJob.venues.length}）` : "";
+  btn.textContent = searchJob.running
+    ? `搜尋中 ${vShort(searchJob.venue)}${step} ${searchJob.done}/${searchJob.total || "?"} 面…`
+    : "搜尋";
+}
+
+async function pollSearch() {
+  await loadSearch();
+  renderAvail();
+  if (searchJob.running) setTimeout(pollSearch, 1200);
+  else refreshLogs();
+}
+
+function initSearchControls() {
+  try { searchSel = JSON.parse(localStorage.getItem("searchSel") || "null") || []; } catch (e) { searchSel = []; }
+  searchSel = searchSel.filter((id) => venues.some((v) => v.id === id));
+  if (!searchSel.length) searchSel = Object.keys(searchResults).length ? Object.keys(searchResults) : [watch.venues[0] || venues[0].id];
+  renderSearchVenues();
+}
+
+/* ---------- tabs ---------- */
+function showTab(name) {
+  document.querySelectorAll(".tab").forEach((t) => t.setAttribute("aria-selected", String(t.dataset.tab === name)));
+  $("panel-filter").hidden = name !== "filter";
+  $("panel-heat").hidden = name !== "heat";
+  $("panel-search").hidden = name !== "search";
+  if (name === "heat") renderHeat(); else if (name === "search") renderAvail(); else renderWeek();
+  try { localStorage.setItem("tab", name); } catch (e) {}
+}
+document.querySelectorAll(".tab").forEach((t) => (t.onclick = () => showTab(t.dataset.tab)));
+
+/* ---------- history heatmap ---------- */
+const HEAT_BINS = [[0, 0.2], [0.2, 0.4], [0.4, 0.6], [0.6, 0.8], [0.8, 1.01]];
+const FEW = 5; // fewer opened court-slots than this = weak evidence
+let heatStats = {};
+let heatJob = { running: false };
+
+function heatCell(stats, wd, h) {
+  const c = (stats && stats.counts[wd] && stats.counts[wd][h]) || {};
+  const booked = c["常租"] || 0, expired = c["已過期"] || 0, n = booked + expired;
+  return { c, booked, expired, n, rate: n ? booked / n : null };
+}
+const heatBin = (rate) => HEAT_BINS.findIndex(([lo, hi]) => rate >= lo && rate < hi);
+
+function renderHeat() {
+  const venue = $("heatVenue").value;
+  const stats = heatStats[venue];
+  if (!stats) {
+    $("heat").innerHTML = `<tbody><tr><td class="never" style="height:120px;cursor:default">這個場地還沒有歷史資料，選好起始日後按「更新歷史資料」</td></tr></tbody>`;
+    $("heatMeta").textContent = "";
+    $("hotList").innerHTML = "";
+    return;
+  }
+  $("heatFilterName").textContent = watch.id ? `濾網「${watch.name}」` : "目前選取的濾網";
+  $("heatMeta").textContent = `${stats.since} ~ ${stats.until}・${stats.courts} 面・更新於 ${fmtTime(stats.generated)}`;
+  const head = DAY_LABELS.map((l) => `<th style="cursor:default">${l}</th>`).join("");
+  const body = HOURS.map((h) => `<tr><th style="cursor:default">${pad(h)}:00</th>${DAY_LABELS.map((_, wd) => {
+    if (!isOpenHour(wd, h)) return `<td class="closed"></td>`;
+    const k = heatCell(stats, wd, h);
+    const watched = isSel(String(wd), h) ? " watched" : "";
+    if (!k.n) return `<td class="never${watched}" data-wd="${wd}" data-h="${h}">—</td>`;
+    return `<td class="h${heatBin(k.rate)}${k.n < FEW ? " few" : ""}${watched}" data-wd="${wd}" data-h="${h}">${Math.round(k.rate * 100)}%</td>`;
+  }).join("")}</tr>`).join("");
+  $("heat").innerHTML = `<thead><tr><th></th>${head}</tr></thead><tbody>${body}</tbody>`;
+
+  $("heatLegend").innerHTML =
+    `<span>被訂光的比例</span>` +
+    HEAT_BINS.map(([lo, hi], i) => `<span><i class="sw" style="background:var(--h${i})"></i>${Math.round(lo * 100)}–${Math.min(100, Math.round(hi * 100))}%</span>`).join("") +
+    `<span><i class="closed" style="display:inline-block;width:22px;height:14px;vertical-align:-2px;border-radius:3px"></i>從未開放線上租借</span>` +
+    `<span><i class="sw frame-few"></i>樣本少於 ${FEW} 面次</span><span><i class="sw frame-watched"></i>濾網中的時段</span>`;
+
+  const ranked = [];
+  for (let wd = 0; wd < 7; wd++) for (const h of HOURS) {
+    const k = heatCell(stats, wd, h);
+    if (isOpenHour(wd, h) && k.n >= FEW) ranked.push({ wd, h, ...k });
+  }
+  ranked.sort((a, b) => b.rate - a.rate || b.n - a.n);
+  const line = (r) => `<li>${DAY_LABELS[r.wd]} ${timeRange(r.h, 1)}：<b>${Math.round(r.rate * 100)}%</b>（開放 ${r.n} 面次，被訂 ${r.booked}）</li>`;
+  const easy = [...ranked].sort((a, b) => a.rate - b.rate || b.n - a.n);
+  $("hotList").innerHTML = ranked.length
+    ? `<div class="row"><div><b>最難訂</b><ol>${ranked.slice(0, 6).map(line).join("")}</ol></div>
+       <div><b>最好訂</b><ol>${easy.slice(0, 6).map(line).join("")}</ol></div></div>`
+    : "";
+}
+
+function heatTip(td) {
+  const stats = heatStats[$("heatVenue").value];
+  if (!stats) return;
+  const wd = Number(td.dataset.wd), h = Number(td.dataset.h), k = heatCell(stats, wd, h);
+  const other = (k.c["未開放"] || 0) + (k.c["假日"] || 0) + (k.c["其他"] || 0);
+  const tip = $("heatTip");
+  tip.innerHTML = `<b>${DAY_LABELS[wd]} ${timeRange(h, 1)}</b>
+    <div class="r"><span>被訂光比例</span><span>${k.n ? Math.round(k.rate * 100) + "%" : "—"}</span></div>
+    <div class="r"><span>被訂走</span><span>${k.booked} 面次</span></div>
+    <div class="r"><span>有開放沒人訂</span><span>${k.expired} 面次</span></div>
+    <div class="r"><span>課程／活動／假日</span><span>${other} 面次</span></div>
+    ${k.n && k.n < FEW ? '<div class="r"><span>樣本少，僅供參考</span><span></span></div>' : ""}
+    <div class="r"><span>${isSel(String(wd), h) ? "點擊移出機器人預訂" : "點擊加入機器人預訂"}</span><span></span></div>`;
+  const wrap = td.closest(".grid-wrap").getBoundingClientRect(), r = td.getBoundingClientRect();
+  tip.hidden = false;
+  let left = r.right - wrap.left + 8;
+  if (left + tip.offsetWidth > wrap.width) left = r.left - wrap.left - tip.offsetWidth - 8;
+  tip.style.left = `${Math.max(0, left)}px`;
+  tip.style.top = `${r.top - wrap.top}px`;
+}
+
+$("heat").addEventListener("pointerover", (e) => {
+  const td = e.target.closest("td[data-wd]");
+  td ? heatTip(td) : ($("heatTip").hidden = true);
+});
+$("heat").addEventListener("pointerleave", () => ($("heatTip").hidden = true));
+$("heat").addEventListener("click", (e) => {
+  const td = e.target.closest("td[data-wd]");
+  if (!td) return;
+  if (!watch.id) { toast("請先到「機器人預訂」建立一個濾網", true); return; }
+  const wd = td.dataset.wd, h = Number(td.dataset.h);
+  setSel(wd, h, !isSel(wd, h));
+  saveWatch(); renderHeat(); heatTip($("heat").querySelector(`td[data-wd="${wd}"][data-h="${h}"]`));
+});
+
+$("heatVenue").onchange = () => {
+  const s = heatStats[$("heatVenue").value];
+  if (s) $("heatSince").value = s.since;
+  renderHeat();
+};
+
+$("heatRefresh").onclick = async () => {
+  try {
+    await api("/api/history", { method: "POST", body: JSON.stringify({ venue: $("heatVenue").value, since: $("heatSince").value }) });
+    toast("開始更新歷史資料，約需 20–30 秒");
+    pollHistory();
+  } catch (err) { toast(err.message, true); }
+  refreshLogs();
+};
+
+async function loadHistory() {
+  const r = await api("/api/history");
+  heatStats = r.stats; heatJob = r.job;
+  const btn = $("heatRefresh");
+  btn.disabled = heatJob.running;
+  btn.textContent = heatJob.running ? `更新中 ${heatJob.done}/${heatJob.total || "?"} 面…` : "更新歷史資料";
+}
+
+async function pollHistory() {
+  await loadHistory();
+  if (heatJob.running) setTimeout(pollHistory, 1500);
+  else { renderHeat(); refreshLogs(); }
+}
+
+function initHeatControls() {
+  $("heatVenue").innerHTML = venues.map((v) => `<option value="${v.id}">${v.name}・${v.sport}</option>`).join("");
+  const first = Object.keys(heatStats)[0] || watch.venues[0] || venues[0].id;
+  $("heatVenue").value = first;
+  const d = new Date(); d.setDate(d.getDate() - 56);
+  $("heatSince").value = heatStats[first] ? heatStats[first].since : ymd(d);
+  $("heatSince").max = ymd(new Date());
+}
+
+/* ---------- init ---------- */
+(async function init() {
+  fillHours();
+  const d = new Date(); d.setDate(d.getDate() + 7);
+  $("date").value = ymd(d);
+  defaultOpenAt();
+  syncHours();
+  venues = await api("/api/venues");
+  renderVenues();
+  updateSummary();
+  await Promise.all([loadCred(), refreshTasks(), refreshLogs(), loadHistory(), loadSearch()]);
+  await refreshRobot(true);
+  initHeatControls();
+  initSearchControls();
+  if (searchJob.running) pollSearch();
+  let tab = "search";
+  try { tab = localStorage.getItem("tab") || "search"; } catch (e) {}
+  showTab(tab);
+  if (heatJob.running) pollHistory();
+  tick();
+  setInterval(tick, 1000);
+  setInterval(refreshLogs, 3000);
+  setInterval(refreshRobot, 2000);
+})();
+</script>
+</body>
+</html>

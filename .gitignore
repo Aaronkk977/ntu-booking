@@ -1,0 +1,11 @@
+credentials.json
+session.json
+tasks.json
+watch.json
+robot.json
+hits.json
+search_cache.json
+history_stats.json
+snapshots/
+__pycache__/
+*.zip

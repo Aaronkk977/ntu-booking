@@ -1,0 +1,164 @@
+"""Data layer shared by 可租時段搜尋 and the robot.
+
+Walks every court of a venue on rent.pe.ntu.edu.tw (today .. BOOK_WINDOW[1] days ahead), parses each
+hour as open / onsite (walk-in only) / full, caches the walk per venue, and turns it into per-hour counts.
+"""
+import json
+import re
+import threading
+import time
+from datetime import date, datetime, timedelta
+from pathlib import Path
+from urllib.parse import urlencode
+
+import session
+
+SNAPSHOT_DIR = Path(__file__).with_name("snapshots")
+BOOK_WINDOW = (3, 7)  # bookable days ahead, inclusive
+
+# Opening hours of 綜合體育館 (start hours that can be booked), by weekday.
+OPEN_HOURS = {wd: list(range(6, 22)) for wd in range(5)}
+OPEN_HOURS[5] = list(range(9, 22))
+OPEN_HOURS[6] = list(range(9, 18))
+
+
+# Schedule markup (from /order/A/ and /__/f/Schedule.php):
+#   <div class="D" d="2026-10-28" v="...">            one day column
+#     <a class="S" v="12" s="Y" r="" ...>             bookable hour (12:00-13:00)
+#     <div class="S" s="N"><div class="SText">13 ~ 14  not bookable (event, closed, already rented)
+#     <div class="N ..." style="height: calc( ... * 3 - 2px );"><div class="EventName" title="請至現場租借">
+#                                                      an event label; it covers this and the next 2 hours
+_DAY_RE = re.compile(r'<div class="D" d="(\d{4}-\d{2}-\d{2})"')
+_SLOT_RE = re.compile(
+    r'<(a|div)\b([^>]*\bclass="S"[^>]*)>\s*<div class="SText">\s*(\d{1,2})\s*~(.*?)(?=<(?:a|div)\b[^>]*\bclass="S"|\Z)', re.S
+)
+_EVENT_RE = re.compile(r'\* (\d+) - 2px \);"><div class="EventName"[^>]*title="([^"]*)"')
+ONSITE_LABEL = "現場租借"  # "請至現場租借": free, but only bookable at the counter
+_COURT_RE = re.compile(r'<a [^>]*\bv="(\d+)"[^>]*class="VSMenu[^"]*"[^>]*title="([^"]*)"')
+_SK_RE = re.compile(r'<textarea name="SK"[^>]*>([^<]*)</textarea>')
+
+
+def parse_schedule(html: str) -> dict[tuple[str, int], str]:
+    """Return {(iso_date, start_hour): "open" | "onsite" | "full"} for every slot in a schedule fragment."""
+    out = {}
+    parts = _DAY_RE.split(html)
+    for day, body in zip(parts[1::2], parts[2::2]):
+        covered_until, onsite = -1, False
+        for tag, attrs, hour_s, inner in _SLOT_RE.findall(body):
+            hour = int(hour_s)
+            event = _EVENT_RE.search(inner)
+            if event:
+                covered_until, onsite = hour + int(event.group(1)), ONSITE_LABEL in event.group(2)
+            if tag == "a" and 's="Y"' in attrs and 'r="Y"' not in attrs:
+                out[(day, hour)] = "open"
+            elif hour < covered_until and onsite:
+                out[(day, hour)] = "onsite"
+            else:
+                out[(day, hour)] = "full"
+    return out
+
+
+def parse_order_page(html: str) -> tuple[list[tuple[str, str]], str]:
+    """Return ([(court_id, court_name), ...], SK token) from /order/A/."""
+    courts = _COURT_RE.findall(html)
+    sk = _SK_RE.search(html)
+    return courts, (sk.group(1) if sk else "")
+
+
+def _epoch(d: date) -> int:
+    return int(datetime.combine(d, datetime.min.time()).timestamp())
+
+
+# Cache of the last full walk per venue (all courts, today .. BOOK_WINDOW[1]), shared by search and
+# the robot, persisted so a restart doesn't force a re-fetch. Court names stay in here for a future
+# order step; the UI only ever receives counts.
+CACHE_FILE = Path(__file__).with_name("search_cache.json")
+CACHE_MAX_AGE_S = 10 * 60
+_cache_lock = threading.Lock()
+
+
+def cache_put(venue: str, courts: list[tuple[str, dict]]) -> None:
+    with _cache_lock:
+        data = json.loads(CACHE_FILE.read_text(encoding="utf-8")) if CACHE_FILE.exists() else {}
+        data[venue] = {
+            "fetched": datetime.now().isoformat(timespec="seconds"),
+            "courts": [[name, {f"{d}|{h}": st for (d, h), st in slots.items()}] for name, slots in courts],
+        }
+        CACHE_FILE.write_text(json.dumps(data, ensure_ascii=False), encoding="utf-8")
+
+
+def cache_get(venue: str, max_age_s: float) -> tuple[list[tuple[str, dict]], datetime] | None:
+    with _cache_lock:
+        if not CACHE_FILE.exists():
+            return None
+        entry = json.loads(CACHE_FILE.read_text(encoding="utf-8")).get(venue)
+    if not entry:
+        return None
+    fetched = datetime.fromisoformat(entry["fetched"])
+    # A walk from an earlier day covers a different booking window, so it is never reused.
+    if fetched.date() != date.today() or (datetime.now() - fetched).total_seconds() > max_age_s:
+        return None
+    courts = [(name, {(k.split("|")[0], int(k.split("|")[1])): st for k, st in slots.items()}) for name, slots in entry["courts"]]
+    return courts, fetched
+
+
+def search(venue: str, progress=None, max_age_s: float = CACHE_MAX_AGE_S) -> dict:
+    """Every hour from today to BOOK_WINDOW[1] days ahead: how many courts are open online / walk-in only."""
+    cached = cache_get(venue, max_age_s) if max_age_s > 0 else None
+    if cached:
+        courts, fetched = cached
+    else:
+        courts, fetched = scan_venue(venue, progress), datetime.now()
+        cache_put(venue, courts)
+    today = date.today()
+    cells = {}
+    for n in range(BOOK_WINDOW[1] + 1):
+        d = today + timedelta(days=n)
+        for h in OPEN_HOURS[d.weekday()]:
+            key = (d.isoformat(), h)
+            cells[f"{key[0]}|{h}"] = {
+                "open": sum(slots.get(key) == "open" for _, slots in courts),
+                "onsite": sum(slots.get(key) == "onsite" for _, slots in courts),
+            }
+    return {
+        "venue": venue,
+        "generated": fetched.isoformat(timespec="seconds"),
+        "from_cache": bool(cached),
+        "dates": [(today + timedelta(days=n)).isoformat() for n in range(BOOK_WINDOW[1] + 1)],
+        "online_from": (today + timedelta(days=BOOK_WINDOW[0])).isoformat(),
+        "courts": len(courts),
+        "cells": cells,
+    }
+
+
+def scan_venue(venue: str, progress=None) -> list[tuple[str, dict]]:
+    """Return [(court_name, {(iso_date, hour): status}), ...] for every court of one venue,
+    covering today through BOOK_WINDOW[1] days ahead."""
+    with session.SITE_LOCK:
+        # ?Add= selects the venue in the server-side session, then /order/A/ shows its first court.
+        session.fetch(f"/order/?Add={venue}")
+        time.sleep(1)
+        page = session.fetch("/order/A/")
+        SNAPSHOT_DIR.mkdir(exist_ok=True)
+        (SNAPSHOT_DIR / f"{venue.replace(':', '_')}_order.html").write_text(page, encoding="utf-8")
+        courts, sk = parse_order_page(page)
+        if not courts:
+            raise ValueError("訂場頁面找不到場地面號，網站格式可能改了（頁面已存到 snapshots/）")
+
+        start = date.today()
+        result = [(courts[0][1], parse_schedule(page))]
+        if progress:
+            progress(1, len(courts))
+        for i, (court_id, court_name) in enumerate(courts[1:], start=2):
+            time.sleep(1.2)
+            form = urlencode({
+                "VenuesSN": court_id, "OrderSource": "Order", "BookingType": "", "Booking": "Y",
+                "OrderSN": "", "OrderType": "A",
+                "SDMK": _epoch(start), "EDMK": _epoch(start + timedelta(days=BOOK_WINDOW[1])),
+                "ViewStatus": "undefined",
+            }) + "&EnV=" + sk  # SK is already URL-encoded in the page, send it as-is like the site's JS
+            data = json.loads(session.fetch("/__/f/Schedule.php", form))
+            result.append((court_name, parse_schedule(data.get("ScheduleList", ""))))
+            if progress:
+                progress(i, len(courts))
+        return result
