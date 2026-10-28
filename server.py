@@ -86,21 +86,22 @@ ROBOT = robot.Robot(log, VENUE_NAMES, VENUE_IDS_ORDERED, on_result=_search_resul
                     is_paused=lambda: _book_job["running"])
 
 
-def _run_book(hit: dict, members: dict, quantity: int) -> None:
+def _run_book(venue: str, day: str, hour: int, quantity: int) -> None:
     def status(msg):
         _book_job.update(message=msg)
         log("info", f"預訂：{msg}")
 
-    label = f"{VENUE_NAMES[hit['venue']]} {hit['date']} {hit['hour']:02d}:00–{hit['hour'] + 1:02d}:00"
+    label = f"{VENUE_NAMES[venue]} {day} {hour:02d}:00–{hour + 1:02d}:00"
+    members = robot.load_config().get("members", robot.DEFAULT_MEMBERS)
     try:
         status(f"準備預訂 {label}，共 {quantity} 面")
-        done = booker.open_booking(hit["venue"], hit["date"], hit["hour"], members, status, quantity=quantity)
+        done = booker.open_booking(venue, day, hour, members, status, quantity=quantity)
         status(f"Edge 視窗已關閉（{len(done)}/{quantity} 面到過確認頁）")
     except booker.SlotGone as e:
         _book_job.update(error=str(e))
         log("warn", f"預訂失敗：{label} {e}")
-        hits = robot.load_hits()
-        gone = robot.find_hit(hits, hit["id"])
+        hits = robot.load_hits()  # the robot's list may hold the same slot
+        gone = hits.get(f"{venue}|{day}|{hour}")
         if gone:
             gone.update(status="gone", gone_at=datetime.now().isoformat(timespec="seconds"))
         robot.save_hits(hits)
@@ -112,6 +113,11 @@ def _run_book(hit: dict, members: dict, quantity: int) -> None:
         log("error", f"預訂中斷：{_book_job['error']}")
     finally:
         _book_job.update(running=False)
+
+
+def _start_book(venue: str, day: str, hour: int, quantity: int, hit_id: str | None = None) -> None:
+    _book_job.update(running=True, hit=hit_id, message="準備中…", error=None)
+    threading.Thread(target=_run_book, args=(venue, day, hour, quantity), daemon=True).start()
 
 
 def _sync_search_from_cache() -> None:
@@ -204,12 +210,13 @@ class Handler(BaseHTTPRequestHandler):
                 return self._json(list(_logs))
         if path == "/api/robot":
             cfg = robot.load_config()
-            hits = sorted((h for h in robot.load_hits().values() if h["status"] != "dismissed"),
-                          key=lambda h: (h["date"], h["hour"], h["venue"]))
+            all_hits = sorted(robot.load_hits().values(), key=lambda h: (h["date"], h["hour"], h["venue"]))
+            hits = [h for h in all_hits if h["status"] != "dismissed"]
             today = date.today()
             return self._json({
                 "state": ROBOT.snapshot(), "interval_min": cfg["interval_min"], "filters": cfg["filters"], "hits": hits,
-                "open_hours": scanner.OPEN_HOURS, "min_interval": robot.MIN_INTERVAL_MIN,
+                "dismissed": [h for h in all_hits if h["status"] == "dismissed"],
+                "hours": scanner.HOURS, "min_interval": robot.MIN_INTERVAL_MIN,
                 "online_dates": [(today + timedelta(days=n)).isoformat()
                                  for n in range(scanner.BOOK_WINDOW[0], scanner.BOOK_WINDOW[1] + 1)],
                 "has_session": session.has_session(), "login_in_progress": _login["in_progress"],
@@ -265,10 +272,31 @@ class Handler(BaseHTTPRequestHandler):
                 return self._json({"error": "這筆已經不能訂了"}, 404)
             if not session.has_session():
                 return self._json({"error": "請先按「登入網站」"}, 400)
-            members = robot.load_config().get("members", robot.DEFAULT_MEMBERS)
             quantity = robot.clamp_want(hit.get("want"), hit.get("count", 1))
-            _book_job.update(running=True, hit=hit_id, message="準備中…", error=None)
-            threading.Thread(target=_run_book, args=(hit, members, quantity), daemon=True).start()
+            _start_book(hit["venue"], hit["date"], hit["hour"], quantity, hit_id)
+            return self._json({"ok": True})
+        if path == "/api/book":  # straight from the search table
+            if _book_job["running"]:
+                return self._json({"error": "已經有一筆預訂視窗開著，請先完成或關閉它"}, 409)
+            venue = body.get("venue")
+            if venue not in VENUE_IDS:
+                return self._json({"error": "請選擇場地"}, 400)
+            try:
+                day, hour = date.fromisoformat(body["date"]), int(body["hour"])
+                quantity = int(body.get("quantity") or 1)
+            except (KeyError, TypeError, ValueError):
+                return self._json({"error": "預訂資料格式錯誤"}, 400)
+            today = date.today()
+            if not (today + timedelta(days=scanner.BOOK_WINDOW[0]) <= day <= today + timedelta(days=scanner.BOOK_WINDOW[1])):
+                return self._json({"error": "只能線上預訂租借日前 3–7 天的時段"}, 400)
+            cell = (_search_results.get(venue) or {}).get("cells", {}).get(f"{day.isoformat()}|{hour}")
+            if not cell or not cell["open"]:
+                return self._json({"error": "這個時段目前沒有線上空場，請重新搜尋"}, 404)
+            if not 1 <= quantity <= cell["open"]:
+                return self._json({"error": f"面數需介於 1 到 {cell['open']} 面（目前可借場數）"}, 400)
+            if not session.has_session():
+                return self._json({"error": "請先按「登入網站」"}, 400)
+            _start_book(venue, day.isoformat(), hour, quantity)
             return self._json({"ok": True})
         if path.startswith("/api/robot/hits/") and path.endswith("/want"):
             hit_id = path.split("/")[4]
@@ -310,6 +338,14 @@ class Handler(BaseHTTPRequestHandler):
                 return self._json({"error": BOOKING_BUSY}, 409)
             ROBOT.scan_now()
             log("info", "手動觸發機器人掃描")
+            return self._json({"ok": True})
+        if path.startswith("/api/robot/hits/") and path.endswith("/restore"):
+            hits = robot.load_hits()
+            hit = robot.find_hit(hits, path.split("/")[4])
+            if hit is None or hit["status"] != "dismissed":
+                return self._json({"error": "這筆已經不在了（空位關閉後會自動清掉）"}, 404)
+            hit["status"] = "available"  # a dismissed hit is only kept while the slot is still open
+            robot.save_hits(hits)
             return self._json({"ok": True})
         if path.startswith("/api/robot/hits/") and path.endswith("/dismiss"):
             hit_id = path.split("/")[4]

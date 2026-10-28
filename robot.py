@@ -47,7 +47,7 @@ def clean_filter(body: dict, venue_ids: list[str]) -> dict:
     slots = {}
     for wd, hours in (body.get("slots") or {}).items():
         if str(wd) in {str(i) for i in range(7)}:
-            valid = sorted({int(h) for h in hours if int(h) in scanner.OPEN_HOURS[int(wd)]})
+            valid = sorted({int(h) for h in hours if int(h) in scanner.HOURS})
             if valid:
                 slots[str(wd)] = valid
     return {

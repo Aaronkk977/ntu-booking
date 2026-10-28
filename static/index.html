@@ -159,6 +159,8 @@
   details.fold[open] > summary { color: var(--text); }
   .avail-venue > b { display: block; margin-bottom: 4px; }
   table.avail td.on { background: var(--ok); border-color: var(--ok); color: #fff; }
+  table.avail td.bookable { cursor: pointer; }
+  table.avail td.bookable:hover { filter: brightness(1.12); }
   table.avail td.site { background: var(--warn-soft); border-color: var(--warn); color: var(--warn); }
   table.avail td.none { color: transparent; }
   table.avail thead th { cursor: default; }
@@ -212,12 +214,12 @@
   .book-bar { padding: 8px 12px; border-radius: 8px; margin-bottom: 8px; font-size: 13px; background: var(--accent-soft); color: var(--accent); font-weight: 600; }
   .book-bar.err { background: var(--err-soft); color: var(--err); }
 
-  dialog.settings { width: min(460px, calc(100% - 32px)); padding: 18px; border: 1px solid var(--line); border-radius: var(--radius);
+  dialog.modal { width: min(460px, calc(100% - 32px)); padding: 18px; border: 1px solid var(--line); border-radius: var(--radius);
     background: var(--card); color: var(--text); box-shadow: 0 12px 40px rgba(0,0,0,.25); }
-  dialog.settings::backdrop { background: rgba(0,0,0,.4); }
-  dialog.settings h2 { font-size: 15px; margin: 0 0 14px; display: flex; align-items: center; }
-  dialog.settings h2 button { margin-left: auto; }
-  dialog.settings h3.sub { margin-top: 22px; }
+  dialog.modal::backdrop { background: rgba(0,0,0,.4); }
+  dialog.modal h2 { font-size: 15px; margin: 0 0 14px; display: flex; align-items: center; }
+  dialog.modal h2 button { margin-left: auto; }
+  dialog.modal h3.sub { margin-top: 22px; }
 
   .toast { position: fixed; bottom: 20px; left: 50%; transform: translateX(-50%) translateY(20px); opacity: 0; transition: .2s;
     background: var(--text); color: var(--bg); padding: 9px 16px; border-radius: 8px; pointer-events: none; z-index: 10; max-width: calc(100% - 32px); }
@@ -238,6 +240,7 @@
 
 <main>
   <section class="card wide">
+    <div class="book-bar" id="bookBar" hidden></div>
     <div class="tabs" role="tablist">
       <button type="button" role="tab" class="tab" data-tab="search" aria-selected="true">可租時段搜尋</button>
       <button type="button" role="tab" class="tab" data-tab="filter" aria-selected="false">機器人預訂</button>
@@ -264,7 +267,8 @@
         <span><i class="sw" style="background:var(--ok)"></i>線上可租（幾面）</span>
         <span><i class="sw" style="background:var(--warn-soft);border:1px solid var(--warn)"></i>僅限現場租借（幾面）</span>
         <span><i></i>已滿或不開放</span>
-        <span><i class="closed"></i>場館未開放</span>
+        <span><i class="closed"></i>不開放租借</span>
+        <span>綠色格子在線上申請期間（3–7 天後）可直接點擊預訂</span>
       </div>
       <details class="fold"><summary id="availSummary">時段清單</summary><div class="hot-list" id="availList"></div></details>
     </div>
@@ -286,8 +290,9 @@
     <h3 class="sub">自動加入的清單 <span class="count" id="hitCount"></span>
       <button type="button" class="small ghost right" id="clearGone">清除已失效</button></h3>
     <p class="hint members-line" id="membersLine"></p>
-    <div class="book-bar" id="bookBar" hidden></div>
     <div class="hits" id="hits"></div>
+    <details class="fold" id="dismissedFold" hidden><summary id="dismissedSummary"></summary>
+      <div class="hits" id="dismissedList" style="margin-top:10px"></div></details>
 
     <h3 class="sub">濾網 <span class="count">每個濾網是一組「場地＋時段」，可以分別啟用</span></h3>
     <div class="filter-tabs" id="filterTabs"></div>
@@ -310,7 +315,6 @@
         <span><i class="sel"></i>這個濾網的時段</span>
         <span><i class="open"></i>目前線上有空（幾面）</span>
         <span><i></i>未選</span>
-        <span><i class="closed"></i>場館未開放</span>
         <span>日期顯示藍色＝目前可線上申請（租借日前 3–7 天）</span>
       </div>
     </div>
@@ -355,7 +359,7 @@
   </div>
 </main>
 
-<dialog class="settings" id="settings">
+<dialog class="modal" id="settings">
   <h2>設定 <button type="button" class="small ghost" id="closeSettings" aria-label="關閉">✕</button></h2>
   <form id="credForm" autocomplete="off">
     <label class="field"><span>租借系統帳號（電子信箱）</span>
@@ -376,6 +380,17 @@
   <h3 class="sub">預訂人數</h3>
   <div class="group" id="members"></div>
   <p class="hint">按「立即預訂」時自動填入學校的表單；羽球等場地至少 2 人。改了馬上儲存。</p>
+</dialog>
+
+<dialog class="modal" id="bookDialog">
+  <h2>預訂 <span id="bookWhat" style="margin-left:8px"></span>
+    <button type="button" class="small ghost" id="closeBook" aria-label="關閉">✕</button></h2>
+  <label class="field"><span>場地</span><select id="bookVenue"></select></label>
+  <label class="field"><span>面數（一面一張訂單，完成一面、關掉分頁後才開下一面）</span>
+    <input id="bookQty" type="number" min="1" value="1"></label>
+  <p class="hint members-line" id="bookMembers"></p>
+  <div class="actions"><button type="button" class="primary" id="bookGo">開啟 Edge 預訂</button></div>
+  <p class="hint">會打開 Edge，自動選好空場、時段與人數，停在學校的確認頁；最後的確認與付款由你自己按。</p>
 </dialog>
 
 <div class="toast" id="toast"></div>
@@ -490,24 +505,22 @@ $("clearLogView").onclick = () => { logCutoff = refreshLogs.total || 0; refreshL
 
 /* ---------- robot: filters (weekly timetables) + auto hit list ---------- */
 const DAY_LABELS = ["週一", "週二", "週三", "週四", "週五", "週六", "週日"]; // index = Python weekday
-let HOURS = []; // every start hour any weekday is open, from the server's opening hours
+let HOURS = []; // every start hour any venue's timetable has, from the server
 const EMPTY_FILTER = { id: null, name: "", enabled: false, venues: [], slots: {} };
 let robotData = { state: {}, filters: [], hits: [] };
 let watch = EMPTY_FILTER; // the filter being edited (heatmap clicks also edit this one)
-let openHours = {};
 let bookDates = {}; // weekday -> ISO date currently inside the online booking window
 let paint = null; // true = selecting, false = clearing, null = not dragging
 let saveTimer = null;
 let lastScanSeen = null;
 
 const pyWeekday = (iso) => (parseDate(iso).getDay() + 6) % 7;
-const isOpenHour = (wd, h) => (openHours[wd] || []).includes(h);
 const isSel = (wd, h) => (watch.slots[wd] || []).includes(h);
 const fmtTime = (iso) => (iso ? iso.replace("T", " ").slice(5, 16) : "—");
 const filterName = (id) => (robotData.filters.find((f) => f.id === id) || {}).name || "（已刪除）";
 
 function setSel(wd, h, on) {
-  if (!watch.id || !isOpenHour(wd, h)) return;
+  if (!watch.id) return;
   const set = new Set(watch.slots[wd] || []);
   on ? set.add(h) : set.delete(h);
   if (set.size) watch.slots[wd] = [...set].sort((a, b) => a - b); else delete watch.slots[wd];
@@ -524,16 +537,17 @@ function saveWatch() {
   }, 350);
 }
 
-// Online-open court count for this filter's venues on the weekday's bookable date (from the shared search results).
+// For this filter's venues on the weekday's bookable date (from the shared search results): online-open court
+// count, and whether any of them rents this hour at all. null when there is no search data for it.
 function openCountFor(wd, h) {
   const day = bookDates[wd];
   if (!day) return null;
-  let n = 0, seen = false;
+  let n = 0, seen = false, rented = false;
   for (const v of watch.venues) {
-    const c = searchResults[v] && searchResults[v].cells[`${day}|${h}`];
-    if (c) { seen = true; n += c.open; }
+    const res = searchResults[v], c = res && res.cells[`${day}|${h}`];
+    if (c) { seen = true; n += c.open; rented = rented || (c.closed || 0) < res.courts; }
   }
-  return seen ? n : null;
+  return seen ? { n, rented } : null;
 }
 
 function renderWeek() {
@@ -544,10 +558,9 @@ function renderWeek() {
   }).join("");
   const body = HOURS.map((h) => `<tr><th data-row="${h}" tabindex="0" title="點擊切換整列">${pad(h)}:00</th>${
     DAY_LABELS.map((_, wd) => {
-      if (!isOpenHour(wd, h)) return `<td class="closed" title="場館未開放"></td>`;
-      const sel = isSel(wd, h), n = sel ? openCountFor(wd, h) : null;
-      const cls = [sel ? "sel" : "", n > 0 ? "r-open" : n === 0 ? "r-full" : ""].join(" ").trim();
-      const txt = n > 0 ? `有空 ${n}` : n === 0 ? "滿" : "";
+      const sel = isSel(wd, h), r = sel ? openCountFor(wd, h) : null;
+      const cls = [sel ? "sel" : "", r && r.n > 0 ? "r-open" : r ? "r-full" : ""].join(" ").trim();
+      const txt = !r ? "" : r.n > 0 ? `有空 ${r.n}` : r.rented ? "滿" : "不開放";
       return `<td data-wd="${wd}" data-h="${h}" tabindex="0" class="${cls}" title="${DAY_LABELS[wd]} ${pad(h)}:00–${pad(h + 1)}:00">${txt}</td>`;
     }).join("")}</tr>`).join("");
   $("week").innerHTML = `<thead><tr><th></th>${head}</tr></thead><tbody>${body}</tbody>`;
@@ -648,11 +661,11 @@ $("week").addEventListener("pointerdown", (e) => {
 // A day header toggles the whole day, an hour header the whole row.
 function toggleWeekHeader(th) {
   if (th.dataset.col !== undefined) {
-    const wd = th.dataset.col, hours = openHours[wd] || [];
-    const on = !hours.every((h) => isSel(wd, h));
-    hours.forEach((h) => setSel(wd, h, on));
+    const wd = th.dataset.col;
+    const on = !HOURS.every((h) => isSel(wd, h));
+    HOURS.forEach((h) => setSel(wd, h, on));
   } else {
-    const h = Number(th.dataset.row), days = DAY_LABELS.map((_, wd) => String(wd)).filter((wd) => isOpenHour(wd, h));
+    const h = Number(th.dataset.row), days = DAY_LABELS.map((_, wd) => String(wd));
     const on = !days.every((wd) => isSel(wd, h));
     days.forEach((wd) => setSel(wd, h, on));
   }
@@ -765,12 +778,37 @@ $("hits").addEventListener("change", async (e) => {
   renderHits();
 });
 
-function renderMembersLine() {
+function membersText() {
   const m = robotData.members || {};
   const parts = Object.entries(robotData.member_types || {}).filter(([t]) => m[t]).map(([t, label]) => `${label} ${m[t]} 人`);
-  $("membersLine").innerHTML = `預訂人數：${parts.join("、") || "未設定"}（按「立即預訂」時自動填入）
+  return `預訂人數：${parts.join("、") || "未設定"}`;
+}
+function renderMembersLine() {
+  $("membersLine").innerHTML = `${membersText()}（按「立即預訂」時自動填入）
     <button type="button" class="small ghost" data-open-settings>修改</button>`;
 }
+
+// Items removed with ✕. They stay listed while the slot is still open; the robot drops them once it closes.
+let dismissedHtml = "";
+function renderDismissed() {
+  const list = robotData.dismissed || [];
+  $("dismissedFold").hidden = !list.length;
+  $("dismissedSummary").textContent = `已移除 ${list.length} 筆（空位還在，可以還原）`;
+  const html = list.map((h) => `
+    <div class="hit"><b>${fmtDate(h.date)} ${timeRange(h.hour, 1)}</b>
+      <span>${venueName(h.venue)}・線上 ${h.count} 面</span>
+      <span class="when">發現於 ${fmtTime(h.first_seen)}</span>
+      <span class="acts"><button type="button" class="small" data-restore="${h.id}">還原</button></span>
+    </div>`).join("");
+  if (html !== dismissedHtml) $("dismissedList").innerHTML = dismissedHtml = html; // the 2 s poll would eat clicks
+}
+$("dismissedList").onclick = guard(async (e) => {
+  const id = e.target.dataset.restore;
+  if (!id) return;
+  await api(`/api/robot/hits/${id}/restore`, { method: "POST" });
+  toast("已還原到清單");
+  refreshRobot();
+});
 
 function renderMembers() {
   const m = robotData.members || {};
@@ -814,8 +852,7 @@ $("logoutBtn").onclick = guard(async () => {
 async function refreshRobot(first = false) {
   const r = await api("/api/robot");
   if (first) {
-    openHours = r.open_hours;
-    HOURS = [...new Set(Object.values(openHours).flat())].sort((a, b) => a - b);
+    HOURS = r.hours;
     $("interval").innerHTML = [3, 5, 10, 15, 30, 60].filter((m) => m >= r.min_interval).map((m) => `<option value="${m}">${m} 分鐘</option>`).join("");
   } else {
     r.filters = robotData.filters;
@@ -825,6 +862,7 @@ async function refreshRobot(first = false) {
   robotData = r;
   renderRobotState();
   renderHits();
+  renderDismissed();
   renderBookJob();
   if (first) renderMembers();
   renderMembersLine();
@@ -866,11 +904,13 @@ function viewVenues() {
 }
 
 // {open: [[venueId, count]...], onsite: [...], nOpen, nOnsite} for one date/hour in the current view.
+// `rented` is false when no venue in view rents this hour (not in its timetable, or all courts 未開放租借).
 function availCell(day, h) {
-  const out = { open: [], onsite: [], nOpen: 0, nOnsite: 0 };
+  const out = { open: [], onsite: [], nOpen: 0, nOnsite: 0, rented: false };
   for (const id of viewVenues()) {
-    const c = searchResults[id].cells[`${day}|${h}`];
+    const res = searchResults[id], c = res.cells[`${day}|${h}`];
     if (!c) continue;
+    if ((c.closed || 0) < res.courts) out.rented = true;
     if (c.open) { out.open.push([id, c.open]); out.nOpen += c.open; }
     if (c.onsite) { out.onsite.push([id, c.onsite]); out.nOnsite += c.onsite; }
   }
@@ -920,12 +960,16 @@ function renderAvail() {
     const mode = d < base.online_from ? '<small class="site">現場</small>' : '<small class="online">線上</small>';
     return `<th>${DAY_LABELS[pyWeekday(d)]} ${parseDate(d).getMonth() + 1}/${parseDate(d).getDate()}${mode}</th>`;
   }).join("");
-  const body = HOURS.map((h) => `<tr><th>${pad(h)}:00</th>${base.dates.map((d) => {
-    if (!isOpenHour(pyWeekday(d), h)) return `<td class="closed"></td>`;
+  const hours = [...new Set(ids.flatMap((id) => searchResults[id].hours || HOURS))].sort((a, b) => a - b);
+  const body = hours.map((h) => `<tr><th>${pad(h)}:00</th>${base.dates.map((d) => {
     const c = availCell(d, h);
     const where = (list) => (multi ? `<br><span style="font-weight:400">${list.map(([id]) => vShort(id)).join("・")}</span>` : "");
+    if (c.nOpen && d >= base.online_from) {
+      return `<td class="on bookable" data-d="${d}" data-h="${h}" tabindex="0">線上 ${c.nOpen} 面${where(c.open)}</td>`;
+    }
     if (c.nOpen) return `<td class="on" data-d="${d}" data-h="${h}">線上 ${c.nOpen} 面${where(c.open)}</td>`;
     if (c.nOnsite) return `<td class="site" data-d="${d}" data-h="${h}">現場 ${c.nOnsite} 面${where(c.onsite)}</td>`;
+    if (!c.rented) return `<td class="closed" title="不開放租借"></td>`;
     return `<td class="none" data-d="${d}" data-h="${h}">滿</td>`;
   }).join("")}</tr>`).join("");
   $("avail").innerHTML = `<thead><tr><th></th>${head}</tr></thead><tbody>${body}</tbody>`;
@@ -955,10 +999,52 @@ $("avail").addEventListener("pointerover", (e) => {
     : '<div class="r"><span>—</span><span></span></div>';
   tip.innerHTML = `<b>${fmtDate(td.dataset.d)} ${timeRange(Number(td.dataset.h), 1)}</b>
     <div class="r"><span style="color:var(--ok);font-weight:600">線上可租</span><span></span></div>${lines(c.open)}
-    <div class="r"><span style="color:var(--warn);font-weight:600">僅限現場</span><span></span></div>${lines(c.onsite)}`;
+    <div class="r"><span style="color:var(--warn);font-weight:600">僅限現場</span><span></span></div>${lines(c.onsite)}
+    ${td.classList.contains("bookable") ? '<div class="r"><span>點擊預訂</span><span></span></div>' : ""}`;
   placeTip(tip, td);
 });
 $("avail").addEventListener("pointerleave", () => ($("availTip").hidden = true));
+
+let bookTarget = null; // { day, h } of the slot in the booking dialog
+function openBook(day, h) {
+  if (robotData.book_job && robotData.book_job.running) { toast("已經有一筆預訂視窗開著，請先完成或關閉它", true); return; }
+  const c = availCell(day, h);
+  if (!c.open.length) return;
+  bookTarget = { day, h };
+  $("bookWhat").textContent = `${fmtDate(day)} ${timeRange(h, 1)}`;
+  $("bookVenue").innerHTML = c.open.map(([id, n]) => `<option value="${id}" data-n="${n}">${venueName(id)}（線上 ${n} 面）</option>`).join("");
+  $("bookQty").value = "1";
+  syncBookQty();
+  $("bookMembers").innerHTML = `${membersText()} <button type="button" class="small ghost" data-open-settings>修改</button>`;
+  $("availTip").hidden = true;
+  $("bookDialog").showModal();
+}
+function syncBookQty() {
+  const n = Number($("bookVenue").selectedOptions[0].dataset.n);
+  $("bookQty").max = n;
+  if (Number($("bookQty").value) > n) $("bookQty").value = String(n);
+}
+$("bookVenue").onchange = syncBookQty;
+$("closeBook").onclick = () => $("bookDialog").close();
+$("bookGo").onclick = guard(async () => {
+  const qty = Math.round(Number($("bookQty").value)), max = Number($("bookQty").max);
+  if (!(qty >= 1 && qty <= max)) { toast(`面數需介於 1 到 ${max} 面（目前可借場數）`, true); return; }
+  await api("/api/book", { method: "POST", body: JSON.stringify({
+    venue: $("bookVenue").value, date: bookTarget.day, hour: bookTarget.h, quantity: qty }) });
+  $("bookDialog").close();
+  toast("正在開啟 Edge 預訂視窗…");
+  refreshRobot(); refreshLogs();
+});
+$("avail").addEventListener("click", (e) => {
+  const td = e.target.closest("td.bookable");
+  if (td) openBook(td.dataset.d, Number(td.dataset.h));
+});
+$("avail").addEventListener("keydown", (e) => {
+  const td = e.target.closest("td.bookable");
+  if (!isActivateKey(e) || !td) return;
+  e.preventDefault();
+  openBook(td.dataset.d, Number(td.dataset.h));
+});
 
 async function startSearch(force) {
   if (!searchSel.length) { toast("請至少勾選一個場地", true); return; }
@@ -1045,7 +1131,6 @@ function renderHeat() {
   $("heatMeta").textContent = `${stats.since} ~ ${stats.until}・${stats.courts} 面・更新於 ${fmtTime(stats.generated)}`;
   const head = DAY_LABELS.map((l) => `<th style="cursor:default">${l}</th>`).join("");
   const body = HOURS.map((h) => `<tr><th style="cursor:default">${pad(h)}:00</th>${DAY_LABELS.map((_, wd) => {
-    if (!isOpenHour(wd, h)) return `<td class="closed"></td>`;
     const k = heatCell(stats, wd, h);
     const watched = isSel(String(wd), h) ? " watched" : "";
     if (!k.n) return `<td class="never${watched}" data-wd="${wd}" data-h="${h}" tabindex="0">—</td>`;
@@ -1062,7 +1147,7 @@ function renderHeat() {
   const ranked = [];
   for (let wd = 0; wd < 7; wd++) for (const h of HOURS) {
     const k = heatCell(stats, wd, h);
-    if (isOpenHour(wd, h) && k.n >= FEW) ranked.push({ wd, h, ...k });
+    if (k.n >= FEW) ranked.push({ wd, h, ...k });
   }
   ranked.sort((a, b) => b.rate - a.rate || b.n - a.n);
   const line = (r) => `<li>${DAY_LABELS[r.wd]} ${timeRange(r.h, 1)}：<b>${Math.round(r.rate * 100)}%</b>（開放 ${r.n} 面次，被訂 ${r.booked}）</li>`;

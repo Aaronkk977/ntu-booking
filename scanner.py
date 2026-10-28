@@ -15,10 +15,10 @@ import session
 
 BOOK_WINDOW = (3, 7)  # bookable days ahead, inclusive
 
-# Opening hours of 綜合體育館 (start hours that can be booked), by weekday.
-OPEN_HOURS = {wd: list(range(6, 22)) for wd in range(5)}
-OPEN_HOURS[5] = list(range(9, 22))
-OPEN_HOURS[6] = list(range(9, 18))
+# Every start hour any venue's timetable has. Each venue's own rows come from the site (06-21 for
+# 多功能球場, 08-21 for others), and per-day closures from its 「未開放租借」 labels, so nothing here is
+# hardcoded per weekday.
+HOURS = list(range(6, 22))
 
 
 # Schedule markup (from /order/A/ and /__/f/Schedule.php):
@@ -33,25 +33,29 @@ SLOT_RE = re.compile(
 )
 EVENT_RE = re.compile(r'\* (\d+) - 2px \);"><div class="EventName"[^>]*title="([^"]*)"')
 ONSITE_LABEL = "現場租借"  # "請至現場租借": free, but only bookable at the counter
+CLOSED_LABEL = "未開放"  # "未開放租借": the venue does not rent this hour at all
 _COURT_RE = re.compile(r'<a [^>]*\bv="(\d+)"[^>]*class="VSMenu[^"]*"[^>]*title="([^"]*)"')
 _SK_RE = re.compile(r'<textarea name="SK"[^>]*>([^<]*)</textarea>')
 
 
 def parse_schedule(html: str) -> dict[tuple[str, int], str]:
-    """Return {(iso_date, start_hour): "open" | "onsite" | "full"} for every slot in a schedule fragment."""
+    """Return {(iso_date, start_hour): "open" | "onsite" | "closed" | "full"} for every slot in a schedule fragment."""
     out = {}
     parts = DAY_RE.split(html)
     for day, body in zip(parts[1::2], parts[2::2]):
-        covered_until, onsite = -1, False
+        covered_until, label = -1, ""
         for tag, attrs, hour_s, inner in SLOT_RE.findall(body):
             hour = int(hour_s)
             event = EVENT_RE.search(inner)
             if event:
-                covered_until, onsite = hour + int(event.group(1)), ONSITE_LABEL in event.group(2)
+                covered_until, label = hour + int(event.group(1)), event.group(2)
+            covered = hour < covered_until
             if tag == "a" and 's="Y"' in attrs and 'r="Y"' not in attrs:
                 out[(day, hour)] = "open"
-            elif hour < covered_until and onsite:
+            elif covered and ONSITE_LABEL in label:
                 out[(day, hour)] = "onsite"
+            elif covered and CLOSED_LABEL in label:
+                out[(day, hour)] = "closed"
             else:
                 out[(day, hour)] = "full"
     return out
@@ -127,7 +131,8 @@ def cache_get(venue: str, max_age_s: float) -> tuple[list[tuple[str, dict]], dat
 
 
 def search(venue: str, progress=None, max_age_s: float = CACHE_MAX_AGE_S) -> dict:
-    """Every hour from today to BOOK_WINDOW[1] days ahead: how many courts are open online / walk-in only."""
+    """Every hour from today to BOOK_WINDOW[1] days ahead: how many courts are open online / walk-in only /
+    not rented at all. `hours` are the rows of this venue's timetable on the site."""
     cached = cache_get(venue, max_age_s) if max_age_s > 0 else None
     if cached:
         courts, fetched = cached
@@ -135,14 +140,14 @@ def search(venue: str, progress=None, max_age_s: float = CACHE_MAX_AGE_S) -> dic
         courts, fetched = scan_venue(venue, progress), datetime.now()
         cache_put(venue, courts)
     today = date.today()
+    hours = sorted({h for _, slots in courts for _, h in slots})
     cells = {}
     for n in range(BOOK_WINDOW[1] + 1):
         d = today + timedelta(days=n)
-        for h in OPEN_HOURS[d.weekday()]:
+        for h in hours:
             key = (d.isoformat(), h)
             cells[f"{key[0]}|{h}"] = {
-                "open": sum(slots.get(key) == "open" for _, slots in courts),
-                "onsite": sum(slots.get(key) == "onsite" for _, slots in courts),
+                st: sum(slots.get(key) == st for _, slots in courts) for st in ("open", "onsite", "closed")
             }
     return {
         "venue": venue,
@@ -151,6 +156,7 @@ def search(venue: str, progress=None, max_age_s: float = CACHE_MAX_AGE_S) -> dic
         "dates": [(today + timedelta(days=n)).isoformat() for n in range(BOOK_WINDOW[1] + 1)],
         "online_from": (today + timedelta(days=BOOK_WINDOW[0])).isoformat(),
         "courts": len(courts),
+        "hours": hours,
         "cells": cells,
     }
 
