@@ -9,7 +9,6 @@ Usage: python history.py [venue_id] [since YYYY-MM-DD]
 """
 import json
 import sys
-import time
 from collections import defaultdict
 from datetime import date, datetime, timedelta
 from pathlib import Path
@@ -61,7 +60,7 @@ def _collect(venue: str, since: date, until: date, progress=None) -> dict:
     counts = defaultdict(lambda: defaultdict(lambda: defaultdict(int)))
     for i, (court_id, court_name) in enumerate(courts):
         if i:
-            time.sleep(1.2)
+            session.pause(1.2)
         cells = label_cells(scanner.fetch_schedule(court_id, sk, since, until))
         for (day, hour), cat in cells.items():
             d = date.fromisoformat(day)

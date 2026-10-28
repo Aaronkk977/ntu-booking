@@ -136,9 +136,11 @@ def update_hits(filters: list[dict], results: dict[str, dict]) -> list[dict]:
 # ---------- loop ----------
 
 class Robot:
-    def __init__(self, log, venue_names: dict[str, str], venue_order: list[str], on_result, is_paused=lambda: False):
+    def __init__(self, log, venue_names: dict[str, str], venue_order: list[str], on_result, is_paused=lambda: False,
+                 relogin=lambda: False):
         self.log, self.venue_names, self.venue_order, self.on_result = log, venue_names, venue_order, on_result
         self.is_paused = is_paused  # e.g. a booking window holds the site; the due round runs once it closes
+        self.relogin = relogin  # tries to log in again unattended; True when it worked
         self.lock = threading.Lock()
         self.state = {"running": False, "last_scan": None, "next_scan": None, "error": None,
                       "venue": None, "done": 0, "total": 0}
@@ -164,6 +166,16 @@ class Robot:
                 self.state["next_scan"] = datetime.now().isoformat(timespec="seconds")
         self._wake.set()
 
+    def logged_in(self) -> None:
+        """A fresh login: drop the stale "login expired" error and, if any filter is active, scan right away
+        instead of waiting out the interval."""
+        active = any(is_active(f) for f in load_config()["filters"])
+        with self.lock:
+            self.state["error"] = None
+            if active:
+                self.state["next_scan"] = datetime.now().isoformat(timespec="seconds")
+        self._wake.set()
+
     def _loop(self) -> None:
         while True:
             self._wake.wait(timeout=5)
@@ -172,36 +184,49 @@ class Robot:
                 due = self.state["next_scan"] and datetime.fromisoformat(self.state["next_scan"]) <= datetime.now()
             if not due or self.is_paused():
                 continue
+            preempted = False
             try:
-                self._scan()
+                preempted = self._scan()
             except Exception as e:  # never let one bad round kill the thread
                 self.log("error", f"機器人掃描發生錯誤：{e.__class__.__name__}: {e}")
                 with self.lock:
                     self.state.update(running=False, error=str(e))
             cfg = load_config()
             with self.lock:
-                if any(is_active(f) for f in cfg["filters"]):
+                if preempted:  # run the round again right after the booking (is_paused holds it until then)
+                    self.state["next_scan"] = datetime.now().isoformat(timespec="seconds")
+                elif any(is_active(f) for f in cfg["filters"]):
                     # A little jitter so requests don't land on exact minute boundaries.
                     nxt = datetime.now() + timedelta(minutes=cfg["interval_min"], seconds=random.randint(0, 30))
                     self.state["next_scan"] = nxt.isoformat(timespec="seconds")
                 else:
                     self.state["next_scan"] = None
 
-    def _scan(self) -> None:
+    def _scan(self) -> bool:
+        """One round over the venues of the active filters. Returns True when a booking cut it short."""
         active = [f for f in load_config()["filters"] if is_active(f)]
         venues = [v for v in self.venue_order if any(v in f["venues"] for f in active)]
         with self.lock:
             self.state.update(running=True, error=None)
-        results, error = {}, None
+        results, error, relogged, preempted = {}, None, False, False
 
         for venue in venues:
             def progress(i, n, venue=venue):
                 with self.lock:
                     self.state.update(venue=venue, done=i, total=n)
             try:
-                res = scanner.search(venue, progress, max_age_s=REUSE_CACHE_S)
+                try:
+                    res = scanner.search(venue, progress, max_age_s=REUSE_CACHE_S)
+                except session.NotLoggedIn:
+                    if relogged or not self.relogin():
+                        raise
+                    relogged = True  # once per round
+                    res = scanner.search(venue, progress, max_age_s=REUSE_CACHE_S)
             except session.NotLoggedIn as e:
                 error = f"{e}，請按「登入網站」"
+                break
+            except session.Preempted:
+                preempted = True
                 break
             except (OSError, ValueError) as e:
                 error = f"讀取失敗：{e}"
@@ -216,8 +241,11 @@ class Robot:
                              f"{hit['date']} {hit['hour']:02d}:00–{hit['hour'] + 1:02d}:00（{hit['count']} 面）")
         if error:
             self.log("error", f"機器人掃描失敗：{error}")
+        elif preempted:
+            self.log("info", "機器人掃描先暫停讓預訂使用網站，預訂視窗關閉後會重新掃描")
         else:
             self.log("info", f"機器人掃描完成：{len(venues)} 個場地，新增 {len(added)} 筆到清單")
         with self.lock:
             self.state.update(running=False, error=error, venue=None,
                               last_scan=datetime.now().isoformat(timespec="seconds"))
+        return preempted

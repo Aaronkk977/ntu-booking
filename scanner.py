@@ -6,7 +6,6 @@ hour as open / onsite (walk-in only) / full, caches the walk per venue, and turn
 import json
 import re
 import threading
-import time
 from datetime import date, datetime, timedelta
 from pathlib import Path
 from urllib.parse import urlencode
@@ -77,7 +76,7 @@ def open_venue(venue: str) -> tuple[list[tuple[str, str]], str, str]:
     already shows the first court's schedule. Callers must hold session.SITE_LOCK."""
     # ?Add= selects the venue in the server-side session, then /order/A/ shows its first court.
     session.fetch(f"/order/?Add={venue}")
-    time.sleep(1)
+    session.pause(1)
     page = session.fetch("/order/A/")
     session.SNAPSHOT_DIR.mkdir(exist_ok=True)
     (session.SNAPSHOT_DIR / f"{venue.replace(':', '_')}_order.html").write_text(page, encoding="utf-8")
@@ -171,7 +170,7 @@ def scan_venue(venue: str, progress=None) -> list[tuple[str, dict]]:
         if progress:
             progress(1, len(courts))
         for i, (court_id, court_name) in enumerate(courts[1:], start=2):
-            time.sleep(1.2)
+            session.pause(1.2)
             html = fetch_schedule(court_id, sk, start, start + timedelta(days=BOOK_WINDOW[1]))
             result.append((court_name, parse_schedule(html)))
             if progress:

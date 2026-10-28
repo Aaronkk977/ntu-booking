@@ -6,6 +6,7 @@ Run:  python server.py   then open http://127.0.0.1:8765
 import json
 import os
 import threading
+import time
 import webbrowser
 from datetime import date, datetime, timedelta
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -47,14 +48,68 @@ def log(level: str, msg: str) -> None:
 _login = {"in_progress": False}
 
 
+def _err(e: Exception) -> str:
+    return f"{e.__class__.__name__}: {str(e).splitlines()[0] if str(e) else ''}"
+
+
 def _run_login(username: str, password: str) -> None:
     try:
+        sso = session.sso_username(username)
+        if sso:
+            try:
+                session.sso_login(sso, password)
+                log("info", "已用計中帳號登入，已儲存登入狀態")
+                ROBOT.logged_in()
+                return
+            except Exception as e:  # wrong password, an extra verification step, Edge missing, ...
+                log("warn", f"計中帳號自動登入沒有成功（{_err(e)}），改開 Edge 視窗讓你手動登入")
         session.interactive_login(username, password)
         log("info", "登入成功，已儲存登入狀態")
+        ROBOT.logged_in()
     except Exception as e:  # Playwright timeout, closed window, missing Edge, ...
-        log("error", f"登入未完成：{e.__class__.__name__}: {str(e).splitlines()[0] if str(e) else ''}")
+        log("error", f"登入未完成：{_err(e)}")
     finally:
         _login["in_progress"] = False
+
+
+# Unattended re-login through 計中 SSO when a request finds the login expired. After a failure it waits
+# RELOGIN_COOLDOWN_S before trying again, so a wrong password is not retried until the account locks.
+RELOGIN_COOLDOWN_S = 10 * 60
+_relogin_lock = threading.Lock()
+_relogin_failed_at = [0.0]
+
+
+def _auto_relogin() -> bool:
+    with _relogin_lock:
+        if session.has_session():  # another thread logged in again while this one waited
+            return True
+        if _login["in_progress"] or time.monotonic() - _relogin_failed_at[0] < RELOGIN_COOLDOWN_S:
+            return False
+        saved = credentials.load_or_none()
+        sso = session.sso_username(saved[0]) if saved else None
+        if not sso:
+            return False
+        _login["in_progress"] = True
+        try:
+            session.sso_login(sso, saved[1])
+            log("info", "登入已過期，已用計中帳號自動重新登入")
+            return True
+        except Exception as e:
+            _relogin_failed_at[0] = time.monotonic()
+            log("error", f"自動重新登入失敗（{_err(e)}），{RELOGIN_COOLDOWN_S // 60} 分鐘內不再自動嘗試，請按「登入網站」")
+            return False
+        finally:
+            _login["in_progress"] = False
+
+
+def _with_relogin(fn):
+    """fn(), retried once after an automatic re-login if it found the login expired."""
+    try:
+        return fn()
+    except session.NotLoggedIn:
+        if not _auto_relogin():
+            raise
+        return fn()
 
 
 _history_job = {"running": False, "venue": None, "done": 0, "total": 0}
@@ -65,10 +120,12 @@ def _run_history(venue: str, since) -> None:
         _history_job.update(done=i, total=n)
 
     try:
-        history.update(venue, since, progress)
+        _with_relogin(lambda: history.update(venue, since, progress))
         log("info", f"歷史資料已更新：{venue} 自 {since.isoformat()}")
     except session.NotLoggedIn as e:
         log("error", f"歷史資料更新失敗：{e}，請按「登入網站」")
+    except session.Preempted:
+        log("warn", "歷史資料更新被預訂中斷，預訂完成後請再按一次「更新歷史資料」")
     except Exception as e:
         log("error", f"歷史資料更新失敗：{e.__class__.__name__}: {e}")
     finally:
@@ -83,7 +140,7 @@ _book_job = {"running": False, "hit": None, "message": "", "error": None}
 BOOKING_BUSY = "Edge 預訂視窗開著時無法讀取網站，請先完成預訂並關閉視窗"
 
 ROBOT = robot.Robot(log, VENUE_NAMES, VENUE_IDS_ORDERED, on_result=_search_results.__setitem__,
-                    is_paused=lambda: _book_job["running"])
+                    is_paused=lambda: _book_job["running"], relogin=_auto_relogin)
 
 
 def _run_book(venue: str, day: str, hour: int, quantity: int) -> None:
@@ -95,7 +152,7 @@ def _run_book(venue: str, day: str, hour: int, quantity: int) -> None:
     members = robot.load_config().get("members", robot.DEFAULT_MEMBERS)
     try:
         status(f"準備預訂 {label}，共 {quantity} 面")
-        done = booker.open_booking(venue, day, hour, members, status, quantity=quantity)
+        done = _with_relogin(lambda: booker.open_booking(venue, day, hour, members, status, quantity=quantity))
         status(f"Edge 視窗已關閉（{len(done)}/{quantity} 面到過確認頁）")
     except booker.SlotGone as e:
         _book_job.update(error=str(e))
@@ -108,8 +165,11 @@ def _run_book(venue: str, day: str, hour: int, quantity: int) -> None:
     except session.NotLoggedIn as e:
         _book_job.update(error=f"{e}，請先按「登入網站」")
         log("error", f"預訂失敗：{e}，請先按「登入網站」")
+    except booker.Stuck as e:
+        _book_job.update(error=str(e))
+        log("warn", f"預訂：{e}；細節存在 snapshots/_booking_failed.txt")
     except Exception as e:  # closed window early, Edge missing, page changed, ...
-        _book_job.update(error=f"{e.__class__.__name__}: {str(e).splitlines()[0] if str(e) else ''}")
+        _book_job.update(error=_err(e))
         log("error", f"預訂中斷：{_book_job['error']}")
     finally:
         _book_job.update(running=False)
@@ -135,7 +195,7 @@ def _run_search(venues: list[str], force: bool) -> None:
     try:
         for step, venue in enumerate(venues, start=1):
             _search_job.update(venue=venue, step=step, done=0, total=0)
-            result = scanner.search(venue, progress, max_age_s=0 if force else scanner.CACHE_MAX_AGE_S)
+            result = _with_relogin(lambda: scanner.search(venue, progress, max_age_s=0 if force else scanner.CACHE_MAX_AGE_S))
             _search_results[venue] = result
             n_open = sum(bool(c["open"]) for c in result["cells"].values())
             n_onsite = sum(bool(c["onsite"]) for c in result["cells"].values())
@@ -143,6 +203,8 @@ def _run_search(venues: list[str], force: bool) -> None:
             log("info", f"可租時段搜尋完成：{VENUE_NAMES[venue]} 線上可租 {n_open} 個時段、僅現場 {n_onsite} 個時段{src}")
     except session.NotLoggedIn as e:
         log("error", f"搜尋失敗：{e}，請按「登入網站」")
+    except session.Preempted:
+        log("warn", "搜尋被預訂中斷，預訂完成後請再搜尋一次")
     except Exception as e:
         log("error", f"搜尋失敗：{e.__class__.__name__}: {e}")
     finally:
@@ -395,7 +457,7 @@ class Handler(BaseHTTPRequestHandler):
                 return self._json({"error": "請先在設定儲存帳號密碼"}, 400)
             _login["in_progress"] = True
             threading.Thread(target=_run_login, args=saved, daemon=True).start()
-            log("info", "已開啟 Edge 登入視窗，請輸入確認碼後按登入（5 分鐘內）")
+            log("info", "登入中：先用計中帳號自動登入，不行的話會開 Edge 視窗讓你手動登入（5 分鐘內）")
             return self._json({"ok": True})
         return self.send_error(404)
 

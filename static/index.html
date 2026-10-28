@@ -375,7 +375,7 @@
       <button type="submit" class="primary">儲存帳號</button>
       <button type="button" class="danger" id="deleteCred">刪除已存資料</button>
     </div>
-    <p class="hint">密碼以 Windows DPAPI 加密存在本機，只有這台電腦的這個 Windows 帳號能解開。存好後按上方「登入網站」，在跳出的 Edge 視窗輸入確認碼。</p>
+    <p class="hint">密碼以 Windows DPAPI 加密存在本機，只有這台電腦的這個 Windows 帳號能解開。臺大信箱帳號會用同一組帳密走計中登入（不用確認碼），登入過期時也會自動重新登入；其他帳號按「登入網站」後在 Edge 視窗輸入確認碼。</p>
   </form>
   <h3 class="sub">預訂人數</h3>
   <div class="group" id="members"></div>
@@ -390,7 +390,7 @@
     <input id="bookQty" type="number" min="1" value="1"></label>
   <p class="hint members-line" id="bookMembers"></p>
   <div class="actions"><button type="button" class="primary" id="bookGo">開啟 Edge 預訂</button></div>
-  <p class="hint">會打開 Edge，自動選好空場、時段與人數，停在學校的確認頁；最後的確認與付款由你自己按。</p>
+  <p class="hint">會在背景自動選好空場、時段與人數，到學校的確認頁時 Edge 才會跳到最前面；最後的確認與付款由你自己按。</p>
 </dialog>
 
 <div class="toast" id="toast"></div>
@@ -598,7 +598,7 @@ function selectFilter(id) {
 function renderRobotState() {
   const r = robotData, st = r.state || {};
   const pill = $("sessionPill");
-  if (r.login_in_progress) { pill.className = "pill warn"; pill.textContent = "登入視窗開啟中"; }
+  if (r.login_in_progress) { pill.className = "pill warn"; pill.textContent = "登入中…"; }
   else if (r.has_session) { pill.className = "pill ok"; pill.textContent = "網站已登入"; }
   else { pill.className = "pill warn"; pill.textContent = "網站未登入"; }
   $("loginBtn").disabled = !!r.login_in_progress;
@@ -839,7 +839,7 @@ function renderBookJob() {
 $("clearGone").onclick = guard(async () => { await api("/api/robot/hits", { method: "DELETE" }); refreshRobot(); });
 
 $("loginBtn").onclick = async () => {
-  try { await api("/api/session/login", { method: "POST" }); toast("已開啟 Edge，請輸入確認碼後登入"); }
+  try { await api("/api/session/login", { method: "POST" }); toast("登入中…（計中帳號自動登入，不行的話會開 Edge 視窗）"); }
   catch (err) { toast(err.message, true); }
   refreshRobot(); refreshLogs();
 };
