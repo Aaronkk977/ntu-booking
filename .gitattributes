@@ -1,0 +1,3 @@
+# start.command must keep LF line endings, even when this folder is zipped on Windows
+*.command text eol=lf
+*.bat text eol=crlf

@@ -1,10 +1,11 @@
-"""Open the school's booking page in an Edge window with the saved login, pick a free court for the
+"""Open the school's booking page in a browser window with the saved login, pick a free court for the
 requested slot, fill the head count, and press 「下一步 確認租借內容」 so the school's confirmation page is
 showing. The window stays off-screen while this runs, so nobody mistakes the automation for something
 they have to click, and comes to the front at the confirmation page. The final confirmation and payment
 are always left to the user in that window.
 """
 import json
+import sys
 import time
 from urllib.parse import urlparse
 
@@ -57,6 +58,9 @@ def _window(page, bounds: dict) -> None:
 
 
 def _hide(page) -> None:
+    if sys.platform == "darwin":  # macOS keeps windows at least partly on screen, so minimize it to the Dock
+        _window(page, {"windowState": "minimized"})
+        return
     _window(page, {"windowState": "normal"})
     _window(page, {"left": OFF_SCREEN, "top": OFF_SCREEN})
 
@@ -181,7 +185,7 @@ def _book(venue, day, hour, members, status, quantity, submit, keep_open_s, insp
     from playwright.sync_api import sync_playwright
 
     with sync_playwright() as p:
-        browser = p.chromium.launch(channel="msedge", headless=False, args=LAUNCH_ARGS)
+        browser = session.launch_browser(p, headless=False, args=LAUNCH_ARGS)
         ctx = browser.new_context(user_agent=ua, no_viewport=True)
         ctx.add_cookies(cookies)
         for k in range(1, quantity + 1):
@@ -189,8 +193,8 @@ def _book(venue, day, hour, members, status, quantity, submit, keep_open_s, insp
                 break
             tag = f"第 {k}/{quantity} 面" if quantity > 1 else ""
             page = ctx.new_page()
-            if k > 1:
-                _hide(page)  # the window was shown for the previous court
+            if k > 1 or sys.platform == "darwin":
+                _hide(page)  # the window was shown for the previous court (on a Mac it opens on screen)
             page.route("**/*", _skip_extras)
             started = time.monotonic()
             status(f"{tag}自動填寫中…")
@@ -209,7 +213,7 @@ def _book(venue, day, hour, members, status, quantity, submit, keep_open_s, insp
                 page.unroute("**/*", _skip_extras)
                 _show(page)
                 first = str(e).splitlines()[0] if str(e) else e.__class__.__name__
-                status(f"{tag}自動填寫卡住（{first}），請在 Edge 手動完成")
+                status(f"{tag}自動填寫卡住（{first}），請在預訂視窗手動完成")
                 _wait_closed(page, browser, keep_open_s)
                 if browser.is_connected():
                     browser.close()
@@ -226,7 +230,7 @@ def _book(venue, day, hour, members, status, quantity, submit, keep_open_s, insp
             _show(page)
             if submit:
                 more = "，完成後關閉分頁會開下一面" if k < quantity else ""
-                status(f"{tag}已到確認頁{took}，請在 Edge 完成預訂{more}")
+                status(f"{tag}已到確認頁{took}，請在預訂視窗完成預訂{more}")
             else:
                 status(f"{tag}已填好表單（測試模式）{took}")
             done.append(court)

@@ -61,12 +61,12 @@ def _run_login(username: str, password: str) -> None:
                 log("info", "已用計中帳號登入，已儲存登入狀態")
                 ROBOT.logged_in()
                 return
-            except Exception as e:  # wrong password, an extra verification step, Edge missing, ...
-                log("warn", f"計中帳號自動登入沒有成功（{_err(e)}），改開 Edge 視窗讓你手動登入")
+            except Exception as e:  # wrong password, an extra verification step, no browser installed, ...
+                log("warn", f"計中帳號自動登入沒有成功（{_err(e)}），改開瀏覽器視窗讓你手動登入")
         session.interactive_login(username, password)
         log("info", "登入成功，已儲存登入狀態")
         ROBOT.logged_in()
-    except Exception as e:  # Playwright timeout, closed window, missing Edge, ...
+    except Exception as e:  # Playwright timeout, closed window, no browser installed, ...
         log("error", f"登入未完成：{_err(e)}")
     finally:
         _login["in_progress"] = False
@@ -137,7 +137,7 @@ _search_results: dict[str, dict] = {}  # latest per-venue result, from a manual 
 
 
 _book_job = {"running": False, "hit": None, "message": "", "error": None}
-BOOKING_BUSY = "Edge 預訂視窗開著時無法讀取網站，請先完成預訂並關閉視窗"
+BOOKING_BUSY = "預訂視窗開著時無法讀取網站，請先完成預訂並關閉視窗"
 
 ROBOT = robot.Robot(log, VENUE_NAMES, VENUE_IDS_ORDERED, on_result=_search_results.__setitem__,
                     is_paused=lambda: _book_job["running"], relogin=_auto_relogin)
@@ -153,7 +153,7 @@ def _run_book(venue: str, day: str, hour: int, quantity: int) -> None:
     try:
         status(f"準備預訂 {label}，共 {quantity} 面")
         done = _with_relogin(lambda: booker.open_booking(venue, day, hour, members, status, quantity=quantity))
-        status(f"Edge 視窗已關閉（{len(done)}/{quantity} 面到過確認頁）")
+        status(f"預訂視窗已關閉（{len(done)}/{quantity} 面到過確認頁）")
     except booker.SlotGone as e:
         _book_job.update(error=str(e))
         log("warn", f"預訂失敗：{label} {e}")
@@ -168,7 +168,7 @@ def _run_book(venue: str, day: str, hour: int, quantity: int) -> None:
     except booker.Stuck as e:
         _book_job.update(error=str(e))
         log("warn", f"預訂：{e}；細節存在 snapshots/_booking_failed.txt")
-    except Exception as e:  # closed window early, Edge missing, page changed, ...
+    except Exception as e:  # closed window early, no browser installed, page changed, ...
         _book_job.update(error=_err(e))
         log("error", f"預訂中斷：{_book_job['error']}")
     finally:
@@ -462,7 +462,7 @@ class Handler(BaseHTTPRequestHandler):
                 return self._json({"error": "請先在設定儲存帳號密碼"}, 400)
             _login["in_progress"] = True
             threading.Thread(target=_run_login, args=saved, daemon=True).start()
-            log("info", "登入中：先用計中帳號自動登入，不行的話會開 Edge 視窗讓你手動登入（5 分鐘內）")
+            log("info", "登入中：先用計中帳號自動登入，不行的話會開瀏覽器視窗讓你手動登入（5 分鐘內）")
             return self._json({"ok": True})
         return self.send_error(404)
 

@@ -388,8 +388,8 @@
   <label class="field"><span>面數</span>
     <input id="bookQty" type="number" min="1" value="1"></label>
   <p class="hint members-line" id="bookMembers"></p>
-  <div class="actions"><button type="button" class="primary" id="bookGo">開啟 Edge 預訂</button></div>
-  <p class="hint">最後的確認與付款請在 Edge 完成</p>
+  <div class="actions"><button type="button" class="primary" id="bookGo">開啟預訂視窗</button></div>
+  <p class="hint">最後的確認與付款請在預訂視窗完成</p>
 </dialog>
 
 <div class="toast" id="toast"></div>
@@ -751,7 +751,7 @@ $("hits").onclick = guard(async (e) => {
   if (book) {
     try {
       await api(`/api/robot/hits/${book}/book`, { method: "POST" });
-      toast("正在開啟 Edge 預訂視窗…");
+      toast("正在開啟預訂視窗視窗…");
     } catch (err) { toast(err.message, true); }
     refreshRobot(); refreshLogs();
   } else if (dismiss) {
@@ -829,7 +829,7 @@ function renderBookJob() {
   bar.textContent = j.running ? `預訂中：${j.message}`
     : j.error ? `上一次預訂：${j.error}` : "";
   // The booking window holds the site, so anything else that reads it would only queue up behind it.
-  const why = j.running ? "Edge 預訂視窗開著，關閉後才能使用" : "";
+  const why = j.running ? "預訂視窗開著，關閉後才能使用" : "";
   $("scanBtn").disabled = !!j.running;
   if (!searchJob.running) $("searchBtn").disabled = $("searchForce").disabled = !!j.running;
   if (!heatJob.running) $("heatRefresh").disabled = !!j.running;
@@ -1043,7 +1043,7 @@ $("bookGo").onclick = guard(async () => {
   await api("/api/book", { method: "POST", body: JSON.stringify({
     venue: $("bookVenue").value, date: bookTarget.day, hour: bookTarget.h, quantity: qty }) });
   $("bookDialog").close();
-  toast("正在開啟 Edge 預訂視窗…");
+  toast("正在開啟預訂視窗視窗…");
   refreshRobot(); refreshLogs();
 });
 $("avail").addEventListener("click", (e) => {

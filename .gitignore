@@ -9,3 +9,4 @@ history_stats.json
 snapshots/
 __pycache__/
 *.zip
+.venv/

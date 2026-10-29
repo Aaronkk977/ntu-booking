@@ -1,8 +1,8 @@
 """Logged-in session for rent.pe.ntu.edu.tw.
 
-Login goes through NTU's 計中 SSO (adfs.ntu.edu.tw, no captcha) in a hidden Edge window when the saved
+Login goes through NTU's 計中 SSO (adfs.ntu.edu.tw, no captcha) in a hidden browser window when the saved
 account is an @ntu.edu.tw address, so it can also run unattended when the login expires. Otherwise, or
-when that fails, a visible Edge window opens with the stored username and password pre-filled and waits
+when that fails, a visible browser window opens with the stored username and password pre-filled and waits
 for the user to finish (the site's own form needs a captcha). The resulting cookies and the browser's
 User-Agent are saved to session.json and reused by the scanner.
 """
@@ -29,6 +29,22 @@ SITE_LOCK = threading.Lock()
 # Set while a booking waits for SITE_LOCK. Walks over many courts (robot, search, history) stop at the next
 # court and let it go first, instead of making the user wait out a whole venue.
 BOOKING_WAITING = threading.Event()
+
+
+# Edge first (it comes with Windows), then Chrome; None is Playwright's own Chromium, for a Mac with
+# neither (`python -m playwright install chromium`).
+BROWSER_CHANNELS = ("msedge", "chrome", None)
+
+
+def launch_browser(p, **kwargs):
+    """Launch the first installed browser of BROWSER_CHANNELS with Playwright `p`."""
+    last = None
+    for channel in BROWSER_CHANNELS:
+        try:
+            return p.chromium.launch(channel=channel, **kwargs)
+        except Exception as e:  # playwright's Error: this one is not installed
+            last = e
+    raise last
 
 
 class NotLoggedIn(Exception):
@@ -81,12 +97,12 @@ def _save_session(ctx, user_agent: str) -> None:
 
 
 def sso_login(sso_user: str, password: str, timeout_s: int = 60) -> None:
-    """Log in through 計中 SSO in a hidden Edge window. Raises NotLoggedIn when it does not end logged in
+    """Log in through 計中 SSO in a hidden browser window. Raises NotLoggedIn when it does not end logged in
     (wrong password, or an extra step such as a verification code that needs a person)."""
     from playwright.sync_api import sync_playwright
 
     with sync_playwright() as p:
-        browser = p.chromium.launch(channel="msedge", headless=True)
+        browser = launch_browser(p, headless=True)
         try:
             # Save the User-Agent of a normal window, not the headless one, for the scanner's requests.
             probe = browser.new_page()
@@ -113,7 +129,7 @@ def interactive_login(username: str, password: str, timeout_s: int = 300) -> Non
     from playwright.sync_api import sync_playwright
 
     with sync_playwright() as p:
-        browser = p.chromium.launch(channel="msedge", headless=False)
+        browser = launch_browser(p, headless=False)
         ctx = browser.new_context()
         page = ctx.new_page()
         page.goto(LOGIN_URL)
