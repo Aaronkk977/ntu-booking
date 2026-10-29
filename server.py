@@ -188,6 +188,11 @@ def _sync_search_from_cache() -> None:
             _search_results[venue] = scanner.search(venue, max_age_s=24 * 3600)
 
 
+def _shown_results() -> dict[str, dict]:
+    """Finished results, plus the courts read so far for venues that have none yet."""
+    return {**scanner.partial_results(), **_search_results}
+
+
 def _run_search(venues: list[str], force: bool) -> None:
     def progress(i, n):
         _search_job.update(done=i, total=n)
@@ -291,7 +296,7 @@ class Handler(BaseHTTPRequestHandler):
             if not _search_job["running"]:
                 _sync_search_from_cache()
             return self._json({
-                "results": _search_results, "job": _search_job, "has_session": session.has_session(),
+                "results": _shown_results(), "job": _search_job, "has_session": session.has_session(),
                 "cache_minutes": scanner.CACHE_MAX_AGE_S // 60,
             })
         return self._static(path)
@@ -351,7 +356,7 @@ class Handler(BaseHTTPRequestHandler):
             today = date.today()
             if not (today + timedelta(days=scanner.BOOK_WINDOW[0]) <= day <= today + timedelta(days=scanner.BOOK_WINDOW[1])):
                 return self._json({"error": "只能線上預訂租借日前 3–7 天的時段"}, 400)
-            cell = (_search_results.get(venue) or {}).get("cells", {}).get(f"{day.isoformat()}|{hour}")
+            cell = (_shown_results().get(venue) or {}).get("cells", {}).get(f"{day.isoformat()}|{hour}")
             if not cell or not cell["open"]:
                 return self._json({"error": "這個時段目前沒有線上空場，請重新搜尋"}, 404)
             if not 1 <= quantity <= cell["open"]:

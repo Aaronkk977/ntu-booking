@@ -133,11 +133,21 @@ def search(venue: str, progress=None, max_age_s: float = CACHE_MAX_AGE_S) -> dic
     """Every hour from today to BOOK_WINDOW[1] days ahead: how many courts are open online / walk-in only /
     not rented at all. `hours` are the rows of this venue's timetable on the site."""
     cached = cache_get(venue, max_age_s) if max_age_s > 0 else None
+    if not cached:
+        with session.SITE_LOCK:
+            # Another walk (the robot, or a search) may have fetched this venue while we waited for the site.
+            cached = cache_get(venue, max_age_s) if max_age_s > 0 else None
+            if not cached:
+                courts, fetched = scan_venue(venue, progress), datetime.now()
+                cache_put(venue, courts)
+                _partial.pop(venue, None)  # only after the cache has it, so the UI never sees neither
     if cached:
         courts, fetched = cached
-    else:
-        courts, fetched = scan_venue(venue, progress), datetime.now()
-        cache_put(venue, courts)
+    return summarize(venue, courts, fetched, from_cache=bool(cached))
+
+
+def summarize(venue: str, courts: list[tuple[str, dict]], fetched: datetime, from_cache: bool = False) -> dict:
+    """Per-hour counts over `courts` (a whole walk, or the courts read so far)."""
     today = date.today()
     hours = sorted({h for _, slots in courts for _, h in slots})
     cells = {}
@@ -151,7 +161,7 @@ def search(venue: str, progress=None, max_age_s: float = CACHE_MAX_AGE_S) -> dic
     return {
         "venue": venue,
         "generated": fetched.isoformat(timespec="seconds"),
-        "from_cache": bool(cached),
+        "from_cache": from_cache,
         "dates": [(today + timedelta(days=n)).isoformat() for n in range(BOOK_WINDOW[1] + 1)],
         "online_from": (today + timedelta(days=BOOK_WINDOW[0])).isoformat(),
         "courts": len(courts),
@@ -160,13 +170,35 @@ def search(venue: str, progress=None, max_age_s: float = CACHE_MAX_AGE_S) -> dic
     }
 
 
+# The courts read so far by the walk in progress, per venue, so the UI can show them before the walk ends.
+# Kept after a walk stops early (booking, logout, error) until that venue's next walk; dropped once a
+# walk is in the cache.
+_partial: dict[str, dict] = {}
+
+
+def partial_results() -> dict[str, dict]:
+    """summarize() of each venue's unfinished walk from today, plus "partial": {done, total, running}."""
+    out = {}
+    for venue, p in list(_partial.items()):
+        if p["started"].date() == date.today() and p["courts"]:
+            out[venue] = {**summarize(venue, list(p["courts"]), p["started"]),
+                          "partial": {"done": len(p["courts"]), "total": p["total"], "running": p["running"]}}
+    return out
+
+
+def partial_courts(venue: str) -> list[tuple[str, dict]]:
+    p = _partial.get(venue)
+    return list(p["courts"]) if p else []
+
+
 def scan_venue(venue: str, progress=None) -> list[tuple[str, dict]]:
     """Return [(court_name, {(iso_date, hour): status}), ...] for every court of one venue,
-    covering today through BOOK_WINDOW[1] days ahead."""
-    with session.SITE_LOCK:
-        courts, sk, page = open_venue(venue)
-        start = date.today()
-        result = [(courts[0][1], parse_schedule(page))]
+    covering today through BOOK_WINDOW[1] days ahead. Callers must hold session.SITE_LOCK."""
+    courts, sk, page = open_venue(venue)
+    start = date.today()
+    result = [(courts[0][1], parse_schedule(page))]
+    _partial[venue] = p = {"started": datetime.now(), "courts": result, "total": len(courts), "running": True}
+    try:
         if progress:
             progress(1, len(courts))
         for i, (court_id, court_name) in enumerate(courts[1:], start=2):
@@ -175,4 +207,6 @@ def scan_venue(venue: str, progress=None) -> list[tuple[str, dict]]:
             result.append((court_name, parse_schedule(html)))
             if progress:
                 progress(i, len(courts))
-        return result
+    finally:
+        p["running"] = False
+    return result

@@ -32,11 +32,10 @@ class Stuck(Exception):
 
 
 def open_courts(venue: str, day: str, hour: int) -> list[str]:
-    """Court names that the latest cached walk saw open for this slot (tried first, in order)."""
+    """Court names that the latest walk saw open for this slot (tried first, in order)."""
     cached = scanner.cache_get(venue, 24 * 3600)
-    if not cached:
-        return []
-    return [name for name, slots in cached[0] if slots.get((day, hour)) == "open"]
+    courts = cached[0] if cached else scanner.partial_courts(venue)  # booked from a walk still in progress
+    return [name for name, slots in courts if slots.get((day, hour)) == "open"]
 
 
 def _playwright_cookies() -> tuple[str, list[dict]]:

@@ -163,6 +163,7 @@
   table.avail td.bookable:hover { filter: brightness(1.12); }
   table.avail td.site { background: var(--warn-soft); border-color: var(--warn); color: var(--warn); }
   table.avail td.none { color: transparent; }
+  table.avail td.pending { color: var(--muted); font-weight: 400; }
   table.avail thead th { cursor: default; }
   table.avail thead th small.site { color: var(--warn); font-weight: 600; }
   table.avail thead th small.online { color: var(--ok); font-weight: 600; }
@@ -866,6 +867,10 @@ async function refreshRobot(first = false) {
   renderBookJob();
   if (first) renderMembers();
   renderMembersLine();
+  if (r.state.running && !first && !searchJob.running) {
+    // A robot walk fills in the table court by court (a search has its own poll).
+    await loadSearch(); if (!$("panel-search").hidden) renderAvail();
+  }
   if (r.state.last_scan !== lastScanSeen) {
     // A robot round updates the shared search results too.
     lastScanSeen = r.state.last_scan;
@@ -907,9 +912,10 @@ function viewVenues() {
 // {open: [[venueId, count]...], onsite: [...], nOpen, nOnsite} for one date/hour in the current view.
 // `rented` is false when no venue in view rents this hour (not in its timetable, or all courts 未開放租借).
 function availCell(day, h) {
-  const out = { open: [], onsite: [], nOpen: 0, nOnsite: 0, rented: false };
+  const out = { open: [], onsite: [], nOpen: 0, nOnsite: 0, rented: false, unfinished: false };
   for (const id of viewVenues()) {
     const res = searchResults[id], c = res.cells[`${day}|${h}`];
+    if (res.partial) out.unfinished = true; // courts not read yet may still be free
     if (!c) continue;
     if ((c.closed || 0) < res.courts) out.rented = true;
     if (c.open) { out.open.push([id, c.open]); out.nOpen += c.open; }
@@ -939,7 +945,10 @@ function renderSearchView() {
   const current = shown.length === 1 ? shown[0] : searchView; // a single venue is shown as itself, without changing the choice
   $("searchView").innerHTML = `<span class="seg">${opts.map(([id, label]) =>
     `<button type="button" data-view="${id}" aria-pressed="${current === id}">${label}</button>`).join("")}</span>`;
-  $("searchMeta").textContent = "資料時間：" + shown.map((id) => `${vShort(id)} ${fmtTime(searchResults[id].generated)}（${ageText(searchResults[id].generated)}）`).join("、");
+  const when = (res) => res.partial
+    ? `${res.partial.running ? "抓取中" : "只抓到"} ${res.partial.done}/${res.partial.total} 面`
+    : `${fmtTime(res.generated)}（${ageText(res.generated)}）`;
+  $("searchMeta").textContent = "資料時間：" + shown.map((id) => `${vShort(id)} ${when(searchResults[id])}`).join("、");
 }
 $("searchView").onclick = (e) => {
   const id = e.target.dataset.view;
@@ -970,6 +979,7 @@ function renderAvail() {
     }
     if (c.nOpen) return `<td class="on" data-d="${d}" data-h="${h}">線上 ${c.nOpen} 面${where(c.open)}</td>`;
     if (c.nOnsite) return `<td class="site" data-d="${d}" data-h="${h}">現場 ${c.nOnsite} 面${where(c.onsite)}</td>`;
+    if (c.unfinished) return `<td class="pending" title="還沒抓完">…</td>`;
     if (!c.rented) return `<td class="closed" title="不開放租借"></td>`;
     return `<td class="none" data-d="${d}" data-h="${h}">滿</td>`;
   }).join("")}</tr>`).join("");
@@ -980,7 +990,7 @@ function renderAvail() {
     for (const d of res.dates) for (const h of HOURS) {
       const c = res.cells[`${d}|${h}`];
       const n = c ? c[kind] : 0;
-      if (n) rows.push(`<li>${fmtDate(d)} ${timeRange(h, 1)}：${n === res.courts ? `全部 ${n} 面` : `${n} 面`}</li>`);
+      if (n) rows.push(`<li>${fmtDate(d)} ${timeRange(h, 1)}：${n === res.courts && !res.partial ? `全部 ${n} 面` : `${n} 面`}</li>`);
     }
     totals[kind] += rows.length;
     return `<div><b>${title}</b>${rows.length ? `<ol>${rows.join("")}</ol>` : '<p class="hint">沒有</p>'}</div>`;
@@ -1061,7 +1071,7 @@ async function startSearch(force) {
 function maybeAutoSearch(why) {
   const booking = robotData.book_job && robotData.book_job.running;
   if (!robotData.has_session || searchJob.running || booking || !searchSel.length) return;
-  const stale = searchSel.filter((id) => !searchResults[id]
+  const stale = searchSel.filter((id) => !searchResults[id] || searchResults[id].partial
     || Date.now() - new Date(searchResults[id].generated) > cacheMinutes * 60000);
   if (!stale.length) return;
   toast(`${why}，自動搜尋 ${stale.map(vShort).join("、")}…`);
