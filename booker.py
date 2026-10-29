@@ -240,3 +240,25 @@ def _book(venue, day, hour, members, status, quantity, submit, keep_open_s, insp
         if browser.is_connected():
             browser.close()
         return done
+
+
+def open_page(path: str) -> None:
+    """Open a page of the site (e.g. an order's 「線上付款」) in a browser window with the saved login, and
+    return once the user closes it. Nothing is clicked here."""
+    from playwright.sync_api import sync_playwright
+
+    ua, cookies = _playwright_cookies()
+    with sync_playwright() as p:
+        browser = session.launch_browser(p, headless=False)
+        ctx = browser.new_context(user_agent=ua, no_viewport=True)
+        ctx.add_cookies(cookies)
+        page = ctx.new_page()
+        page.goto(session.BASE + path, wait_until="domcontentloaded")
+        if "U=login" in page.url:
+            browser.close()
+            session.clear()
+            raise session.NotLoggedIn("登入已過期")
+        _show(page)
+        _wait_closed(page, browser, None)
+        if browser.is_connected():
+            browser.close()

@@ -15,6 +15,7 @@ from pathlib import Path
 import booker
 import credentials
 import history
+import orders
 import robot
 import scanner
 import session
@@ -154,6 +155,8 @@ def _run_book(venue: str, day: str, hour: int, quantity: int) -> None:
         status(f"準備預訂 {label}，共 {quantity} 面")
         done = _with_relogin(lambda: booker.open_booking(venue, day, hour, members, status, quantity=quantity))
         status(f"預訂視窗已關閉（{len(done)}/{quantity} 面到過確認頁）")
+        if done:
+            _start_orders()
     except booker.SlotGone as e:
         _book_job.update(error=str(e))
         log("warn", f"預訂失敗：{label} {e}")
@@ -178,6 +181,42 @@ def _run_book(venue: str, day: str, hour: int, quantity: int) -> None:
 def _start_book(venue: str, day: str, hour: int, quantity: int, hit_id: str | None = None) -> None:
     _book_job.update(running=True, hit=hit_id, message="準備中…", error=None)
     threading.Thread(target=_run_book, args=(venue, day, hour, quantity), daemon=True).start()
+
+
+_orders = {"data": None, "running": False, "error": None, "page_open": False}
+
+
+def _run_orders() -> None:
+    try:
+        data = _with_relogin(orders.fetch_orders)
+        _orders.update(data=data, error=None)
+        n_unpaid = sum(o["kind"] == "unpaid" for o in data["orders"])
+        log("info", f"已讀取訂單：{len(data['orders'])} 筆{f'，{n_unpaid} 筆待繳費' if n_unpaid else ''}")
+    except session.NotLoggedIn as e:
+        _orders.update(error=f"{e}，請按「登入網站」")
+    except Exception as e:  # offline, page changed, ...
+        _orders.update(error=_err(e))
+        log("error", f"讀取訂單失敗：{_err(e)}")
+    finally:
+        _orders.update(running=False)
+
+
+def _start_orders() -> bool:
+    if _orders["running"]:
+        return False
+    _orders.update(running=True)
+    threading.Thread(target=_run_orders, daemon=True).start()
+    return True
+
+
+def _run_order_page(path: str) -> None:
+    try:
+        _with_relogin(lambda: booker.open_page(path))
+    except Exception as e:  # closed early, no browser, login expired, ...
+        log("error", f"開啟訂單頁面失敗：{_err(e)}")
+    finally:
+        _orders.update(page_open=False)
+        _start_orders()  # the user may have paid or cancelled there
 
 
 def _sync_search_from_cache() -> None:
@@ -292,6 +331,8 @@ class Handler(BaseHTTPRequestHandler):
             })
         if path == "/api/history":
             return self._json({"stats": history.load_all(), "job": _history_job})
+        if path == "/api/orders":
+            return self._json(_orders)
         if path == "/api/search":
             if not _search_job["running"]:
                 _sync_search_from_cache()
@@ -453,6 +494,26 @@ class Handler(BaseHTTPRequestHandler):
             _history_job.update(running=True, venue=venue, done=0, total=0)
             threading.Thread(target=_run_history, args=(venue, since), daemon=True).start()
             log("info", f"開始更新歷史資料：{venue} 自 {since.isoformat()}")
+            return self._json({"ok": True})
+        if path == "/api/orders/refresh":
+            if not session.has_session():
+                return self._json({"error": "請先按「登入網站」"}, 400)
+            _start_orders()
+            return self._json({"ok": True})
+        if path.startswith("/api/orders/") and path.rsplit("/", 1)[1] in ("pay", "detail"):
+            order_id, what = path.split("/")[3], path.rsplit("/", 1)[1]
+            known = {o["id"]: o for o in ((_orders["data"] or {}).get("orders") or [])}
+            if order_id not in known:
+                return self._json({"error": "找不到這筆訂單，請重新整理"}, 404)
+            if what == "pay" and not known[order_id]["can_pay"]:
+                return self._json({"error": "這筆訂單目前不能線上付款"}, 400)
+            if _orders["page_open"]:
+                return self._json({"error": "已經有一個訂單視窗開著，請先關閉它"}, 409)
+            if not session.has_session():
+                return self._json({"error": "請先按「登入網站」"}, 400)
+            _orders.update(page_open=True)
+            target = orders.pay_path(order_id) if what == "pay" else orders.detail_path(order_id)
+            threading.Thread(target=_run_order_page, args=(target,), daemon=True).start()
             return self._json({"ok": True})
         if path == "/api/session/login":
             if _login["in_progress"]:

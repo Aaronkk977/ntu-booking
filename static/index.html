@@ -214,6 +214,12 @@
   .member input { width: 56px; padding: 3px 6px; }
   .book-bar { padding: 8px 12px; border-radius: 8px; margin-bottom: 8px; font-size: 13px; background: var(--accent-soft); color: var(--accent); font-weight: 600; }
   .book-bar.err { background: var(--err-soft); color: var(--err); }
+  .hit.paid { border-color: var(--ok); }
+  .hit.cancelled { opacity: .65; }
+  .hit .due { font-size: 12.5px; color: var(--warn); }
+  .hit .due.late { color: var(--err); font-weight: 600; }
+  .orders-error { color: var(--err); margin: 0 0 10px; }
+  .tab.urgent, .tab.urgent[aria-selected="true"] { color: var(--err); font-weight: 600; }
 
   dialog.modal { width: min(460px, calc(100% - 32px)); padding: 18px; border: 1px solid var(--line); border-radius: var(--radius);
     background: var(--card); color: var(--text); box-shadow: 0 12px 40px rgba(0,0,0,.25); }
@@ -246,6 +252,7 @@
       <button type="button" role="tab" class="tab" data-tab="search" aria-selected="true">可租時段搜尋</button>
       <button type="button" role="tab" class="tab" data-tab="filter" aria-selected="false">機器人預訂</button>
       <button type="button" role="tab" class="tab" data-tab="heat" aria-selected="false">歷史熱門度</button>
+      <button type="button" role="tab" class="tab" data-tab="orders" aria-selected="false" id="ordersTab">訂單管理</button>
     </div>
 
     <div class="tabpanel" id="panel-search">
@@ -334,6 +341,20 @@
       </div>
       <div class="legend" id="heatLegend"></div>
       <details class="fold"><summary>最難訂／最好訂排行</summary><div class="hot-list" id="hotList"></div></details>
+    </div>
+    <div class="tabpanel" id="panel-orders" hidden>
+      <p class="hint tab-hint">網站「常租紀錄」裡的訂單。付款請按「線上付款」，在開啟的視窗完成。</p>
+      <div class="toolbar">
+        <button type="button" class="small" id="ordersRefresh">重新整理</button>
+        <span class="hint" id="ordersMeta" style="margin:0"></span>
+      </div>
+      <p class="hint orders-error" id="ordersError" hidden></p>
+      <h3 class="sub">待繳費 <span class="count" id="unpaidCount"></span></h3>
+      <div class="hits" id="ordersUnpaid"></div>
+      <h3 class="sub">已繳費 <span class="count" id="paidCount"></span></h3>
+      <div class="hits" id="ordersPaid"></div>
+      <details class="fold" id="ordersPastFold" hidden><summary id="ordersPastSummary"></summary>
+        <div class="hits" id="ordersPast" style="margin-top:10px"></div></details>
     </div>
   </section>
 
@@ -1113,10 +1134,103 @@ function showTab(name) {
   $("panel-filter").hidden = name !== "filter";
   $("panel-heat").hidden = name !== "heat";
   $("panel-search").hidden = name !== "search";
-  if (name === "heat") renderHeat(); else if (name === "search") renderAvail(); else renderWeek();
+  $("panel-orders").hidden = name !== "orders";
+  if (name === "heat") renderHeat(); else if (name === "search") renderAvail();
+  else if (name === "orders") { renderOrders(); maybeRefreshOrders(); } else renderWeek();
   try { localStorage.setItem("tab", name); } catch (e) {}
 }
 document.querySelectorAll(".tab").forEach((t) => (t.onclick = () => showTab(t.dataset.tab)));
+
+/* ---------- orders (常租紀錄 on the site) ---------- */
+const ORDERS_MAX_AGE_MIN = 5; // opening the tab re-reads the site when the list is older than this
+let orders = { data: null, running: false, error: null, page_open: false };
+
+const daysUntil = (iso) => Math.round((parseDate(iso) - parseDate(ymd(new Date()))) / 86400000);
+
+function orderRow(o) {
+  const slots = o.slots.map((t) => `${fmtDate(t.date)} ${t.start} – ${t.end}`).join("、") || "—";
+  const pill = { unpaid: ["warn", "待繳費"], paid: ["ok", "已繳費"], cancelled: ["", o.order_status || "已取消"] }[o.kind];
+  let note = "";
+  if (o.kind === "unpaid" && o.deadline) {
+    const n = daysUntil(o.deadline);
+    note = `<span class="due ${n <= 1 ? "late" : ""}">繳費截止 ${fmtDate(o.deadline)}${n < 0 ? "（已過期）" : n === 0 ? "（今天）" : `（剩 ${n} 天）`}</span>`;
+  } else if (o.payment_note) {
+    note = `<span class="when" style="margin-left:0">${escapeHtml(o.payment_note)}</span>`;
+  }
+  const busy = orders.page_open ? "disabled" : "";
+  return `<div class="hit ${o.kind}">
+    <span class="pill ${pill[0]}">${escapeHtml(pill[1])}</span>
+    <b>${slots}</b>
+    <span>${escapeHtml(o.venue)}・${escapeHtml(o.amount)}</span>
+    ${note}
+    <span class="tag">${escapeHtml(o.order_no)}</span>
+    <span class="acts" style="margin-left:auto">
+      ${o.kind === "unpaid" && o.can_pay ? `<button type="button" class="small primary" data-pay="${o.id}" ${busy}>線上付款</button>` : ""}
+      <button type="button" class="small" data-detail="${o.id}" ${busy}>詳細內容</button>
+    </span>
+  </div>`;
+}
+
+function renderOrders() {
+  const list = (orders.data && orders.data.orders) || [];
+  const today = ymd(new Date());
+  // Past = every rental time is over; cancelled ones go there too.
+  const past = (o) => o.kind === "cancelled" || (o.slots.length && o.slots.every((t) => t.date < today));
+  const byDate = (a, b) => ((a.slots[0] || {}).date || "").localeCompare((b.slots[0] || {}).date || "");
+  const unpaid = list.filter((o) => o.kind === "unpaid" && !past(o)).sort(byDate);
+  const paid = list.filter((o) => o.kind === "paid" && !past(o)).sort(byDate);
+  const old = list.filter(past);
+  // The label turns red once a payment deadline is a day away (or today, or already past).
+  const urgent = unpaid.filter((o) => o.deadline && daysUntil(o.deadline) <= 1);
+  const soonest = Math.min(...urgent.map((o) => daysUntil(o.deadline)));
+  const when = soonest < 0 ? "已過繳費期限" : soonest === 0 ? "今天截止" : "明天截止";
+  $("ordersTab").textContent = urgent.length === 1 ? `訂單管理（1 筆${when}）`
+    : urgent.length ? `訂單管理（${urgent.length} 筆即將截止）`
+    : unpaid.length ? `訂單管理（${unpaid.length} 筆待繳費）` : "訂單管理";
+  $("ordersTab").classList.toggle("urgent", urgent.length > 0);
+  $("ordersRefresh").disabled = orders.running;
+  $("ordersRefresh").textContent = orders.running ? "讀取中…" : "重新整理";
+  $("ordersMeta").textContent = orders.data ? `資料時間：${fmtTime(orders.data.fetched)}（${ageText(orders.data.fetched)}）` : "";
+  $("ordersError").hidden = !orders.error;
+  $("ordersError").textContent = orders.error || "";
+  $("unpaidCount").textContent = unpaid.length ? `${unpaid.length} 筆` : "";
+  $("paidCount").textContent = paid.length ? `${paid.length} 筆` : "";
+  const none = orders.data ? "沒有" : orders.running ? "讀取中…" : "還沒讀取，按「重新整理」";
+  $("ordersUnpaid").innerHTML = unpaid.map(orderRow).join("") || `<div class="empty">${none}</div>`;
+  $("ordersPaid").innerHTML = paid.map(orderRow).join("") || `<div class="empty">${none}</div>`;
+  $("ordersPastFold").hidden = !old.length;
+  $("ordersPastSummary").textContent = `已取消或已過去（${old.length} 筆）`;
+  $("ordersPast").innerHTML = old.map(orderRow).join("");
+}
+
+async function loadOrders() {
+  orders = await api("/api/orders");
+  renderOrders(); // also when hidden: the tab's label counts the unpaid ones
+}
+async function pollOrders() {
+  await loadOrders();
+  if (orders.running) setTimeout(pollOrders, 1200);
+}
+
+async function refreshOrders() {
+  try { await api("/api/orders/refresh", { method: "POST" }); } catch (err) { toast(err.message, true); return; }
+  pollOrders();
+}
+
+function maybeRefreshOrders() {
+  if (!robotData.has_session || orders.running) return;
+  if (!orders.data || Date.now() - new Date(orders.data.fetched) > ORDERS_MAX_AGE_MIN * 60000) refreshOrders();
+}
+
+$("ordersRefresh").onclick = refreshOrders;
+$("panel-orders").addEventListener("click", guard(async (e) => {
+  const b = e.target.closest("button[data-pay], button[data-detail]");
+  if (!b) return;
+  const pay = b.dataset.pay;
+  await api(`/api/orders/${pay || b.dataset.detail}/${pay ? "pay" : "detail"}`, { method: "POST" });
+  toast(pay ? "正在開啟付款頁面…" : "正在開啟訂單頁面…");
+  loadOrders();
+}));
 
 /* ---------- history heatmap ---------- */
 const HEAT_BINS = [[0, 0.2], [0.2, 0.4], [0.4, 0.6], [0.6, 0.8], [0.8, 1.01]];
@@ -1273,9 +1387,12 @@ function initHeatControls() {
   try { tab = localStorage.getItem("tab") || "search"; } catch (e) {}
   showTab(tab);
   if (heatJob.running) pollHistory();
+  await loadOrders();
+  maybeRefreshOrders(); // one page from the site, so the tab can say how many orders are unpaid
   if (!cred.has_password) openSettings(); // first run: the account is needed before anything else works
   setInterval(refreshLogs, 3000);
   setInterval(refreshRobot, 2000);
+  setInterval(loadOrders, 5000); // picks up a re-read after a booking or an order window closes
 })();
 </script>
 </body>
