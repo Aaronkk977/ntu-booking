@@ -61,12 +61,14 @@ def _run_login(username: str, password: str) -> None:
                 session.sso_login(sso, password)
                 log("info", "已用計中帳號登入，已儲存登入狀態")
                 ROBOT.logged_in()
+                _start_orders()
                 return
             except Exception as e:  # wrong password, an extra verification step, no browser installed, ...
                 log("warn", f"計中帳號自動登入沒有成功（{_err(e)}），改開瀏覽器視窗讓你手動登入")
         session.interactive_login(username, password)
         log("info", "登入成功，已儲存登入狀態")
         ROBOT.logged_in()
+        _start_orders()
     except Exception as e:  # Playwright timeout, closed window, no browser installed, ...
         log("error", f"登入未完成：{_err(e)}")
     finally:
@@ -140,8 +142,9 @@ _search_results: dict[str, dict] = {}  # latest per-venue result, from a manual 
 _book_job = {"running": False, "hit": None, "message": "", "error": None}
 BOOKING_BUSY = "預訂視窗開著時無法讀取網站，請先完成預訂並關閉視窗"
 
+# A due round waits while a booking window is open, and while the orders are read (they go first).
 ROBOT = robot.Robot(log, VENUE_NAMES, VENUE_IDS_ORDERED, on_result=_search_results.__setitem__,
-                    is_paused=lambda: _book_job["running"], relogin=_auto_relogin)
+                    is_paused=lambda: _book_job["running"] or _orders["running"], relogin=_auto_relogin)
 
 
 def _run_book(venue: str, day: str, hour: int, quantity: int) -> None:
@@ -183,7 +186,11 @@ def _start_book(venue: str, day: str, hour: int, quantity: int, hit_id: str | No
     threading.Thread(target=_run_book, args=(venue, day, hour, quantity), daemon=True).start()
 
 
-_orders = {"data": None, "running": False, "error": None, "page_open": False}
+# Orders are read from the site in the background: at startup, after a login, every ORDERS_INTERVAL_S, and
+# right away after a booking or order window closes. It is a single request that does not switch the venue,
+# so it never waits for a search or a robot walk.
+ORDERS_INTERVAL_S = 30 * 60
+_orders = {"data": orders.load_saved(), "running": False, "error": None, "page_open": False}
 
 
 def _run_orders() -> None:
@@ -199,6 +206,7 @@ def _run_orders() -> None:
         log("error", f"讀取訂單失敗：{_err(e)}")
     finally:
         _orders.update(running=False)
+        ROBOT.wake()
 
 
 def _start_orders() -> bool:
@@ -207,6 +215,15 @@ def _start_orders() -> bool:
     _orders.update(running=True)
     threading.Thread(target=_run_orders, daemon=True).start()
     return True
+
+
+def _orders_loop() -> None:
+    while True:
+        data = _orders["data"]
+        age = (datetime.now() - datetime.fromisoformat(data["fetched"])).total_seconds() if data else None
+        if session.has_session() and not _orders["page_open"] and (age is None or age >= ORDERS_INTERVAL_S):
+            _start_orders()
+        time.sleep(60)
 
 
 def _run_order_page(path: str) -> None:
@@ -237,6 +254,8 @@ def _run_search(venues: list[str], force: bool) -> None:
         _search_job.update(done=i, total=n)
 
     try:
+        while _orders["running"]:  # the orders go first; they take about a second
+            time.sleep(0.2)
         for step, venue in enumerate(venues, start=1):
             _search_job.update(venue=venue, step=step, done=0, total=0)
             result = _with_relogin(lambda: scanner.search(venue, progress, max_age_s=0 if force else scanner.CACHE_MAX_AGE_S))
@@ -562,6 +581,7 @@ if __name__ == "__main__":
     server = ThreadingHTTPServer((HOST, PORT), Handler)
     url = f"http://{HOST}:{PORT}"
     log("info", "控制台已啟動")
+    threading.Thread(target=_orders_loop, daemon=True).start()  # first, before the robot's first walk
     ROBOT.reschedule()  # start scanning right away if any filter is enabled
     if session.has_session():  # a login saved hours ago has probably expired; find out before showing "logged in"
         threading.Thread(target=session.check, daemon=True).start()

@@ -10,3 +10,4 @@ snapshots/
 __pycache__/
 *.zip
 .venv/
+orders.json

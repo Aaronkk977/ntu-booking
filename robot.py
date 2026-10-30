@@ -166,6 +166,10 @@ class Robot:
                 self.state["next_scan"] = datetime.now().isoformat(timespec="seconds")
         self._wake.set()
 
+    def wake(self) -> None:
+        """Check now whether a round is due (e.g. once is_paused() stops holding it)."""
+        self._wake.set()
+
     def logged_in(self) -> None:
         """A fresh login: drop the stale "login expired" error and, if any filter is active, scan right away
         instead of waiting out the interval."""

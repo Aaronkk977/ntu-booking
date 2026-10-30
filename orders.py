@@ -2,16 +2,19 @@
 
 Online bookings of ball courts show up there (租借紀錄 stays empty for them). Each order has its rental
 times, venue, amount, 訂單狀態 (已核准, 會員取消, ...) and 繳費狀態 (待繳費 with a deadline, 已繳費 with
-the time paid). The list may be paged on the site; only its first page is read. Reading the list does not change the venue chosen in the server-side session, so it does
-not need session.SITE_LOCK.
+the time paid). The list may be paged on the site; only its first page is read. Reading the list does
+not change the venue chosen in the server-side session, so it does not need session.SITE_LOCK.
 """
 import html as htmllib
+import json
 import re
 from datetime import datetime
+from pathlib import Path
 
 import session
 
 ORDERS_PATH = "/member/rental/"
+ORDERS_FILE = Path(__file__).with_name("orders.json")  # the last list read, shown at once after a restart
 
 _ROW_RE = re.compile(r"<tbody>\s*<tr class=\"I\">(.*?)</tr>\s*</tbody>", re.S)
 _CELL_RE = re.compile(r'<div class="(?:MC )?(\w+)"[^>]*>(.*?)</div>', re.S)
@@ -73,7 +76,13 @@ def fetch_orders() -> dict:
         raise ValueError("訂單頁面格式可能改了（頁面已存到 snapshots/_orders.html）")
     for o in orders:
         o["kind"] = classify(o)
-    return {"fetched": datetime.now().isoformat(timespec="seconds"), "orders": orders}
+    data = {"fetched": datetime.now().isoformat(timespec="seconds"), "orders": orders}
+    ORDERS_FILE.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+    return data
+
+
+def load_saved() -> dict | None:
+    return json.loads(ORDERS_FILE.read_text(encoding="utf-8")) if ORDERS_FILE.exists() else None
 
 
 def pay_path(order_id: str) -> str:

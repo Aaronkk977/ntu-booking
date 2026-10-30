@@ -1109,9 +1109,12 @@ async function loadSearch() {
   btn.disabled = $("searchForce").disabled = searchJob.running;
   cacheMinutes = r.cache_minutes;
   const step = searchJob.venues && searchJob.venues.length > 1 ? `（${searchJob.step}/${searchJob.venues.length}）` : "";
-  btn.textContent = searchJob.running
-    ? `搜尋中 ${vShort(searchJob.venue)}${step} ${searchJob.done}/${searchJob.total || "?"} 面…`
-    : "搜尋";
+  // Before its own walk starts, the search may be waiting for the robot's walk of the same venue, whose
+  // result it then reuses; show that walk's progress instead of 0/?.
+  const other = !searchJob.total && searchResults[searchJob.venue] && searchResults[searchJob.venue].partial;
+  const progress = other && other.running ? `${other.done}/${other.total} 面`
+    : searchJob.total ? `${searchJob.done}/${searchJob.total} 面` : "排隊中"; // the robot or a booking has the site
+  btn.textContent = searchJob.running ? `搜尋中 ${vShort(searchJob.venue)}${step} ${progress}…` : "搜尋";
 }
 
 async function pollSearch() {
@@ -1142,7 +1145,7 @@ function showTab(name) {
 document.querySelectorAll(".tab").forEach((t) => (t.onclick = () => showTab(t.dataset.tab)));
 
 /* ---------- orders (常租紀錄 on the site) ---------- */
-const ORDERS_MAX_AGE_MIN = 5; // opening the tab re-reads the site when the list is older than this
+const ORDERS_MAX_AGE_MIN = 5; // opening the tab re-reads the site at once when the list is older than this
 let orders = { data: null, running: false, error: null, page_open: false };
 
 const daysUntil = (iso) => Math.round((parseDate(iso) - parseDate(ymd(new Date()))) / 86400000);
@@ -1387,12 +1390,11 @@ function initHeatControls() {
   try { tab = localStorage.getItem("tab") || "search"; } catch (e) {}
   showTab(tab);
   if (heatJob.running) pollHistory();
-  await loadOrders();
-  maybeRefreshOrders(); // one page from the site, so the tab can say how many orders are unpaid
+  await loadOrders(); // the server reads them in the background; this shows the latest it has
   if (!cred.has_password) openSettings(); // first run: the account is needed before anything else works
   setInterval(refreshLogs, 3000);
   setInterval(refreshRobot, 2000);
-  setInterval(loadOrders, 5000); // picks up a re-read after a booking or an order window closes
+  setInterval(loadOrders, 5000); // picks up the server's background reads
 })();
 </script>
 </body>
