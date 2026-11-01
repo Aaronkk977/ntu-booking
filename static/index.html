@@ -991,7 +991,13 @@ function renderAvail() {
     const mode = d < base.online_from ? '<small class="site">現場</small>' : '<small class="online">線上</small>';
     return `<th>${DAY_LABELS[pyWeekday(d)]} ${parseDate(d).getMonth() + 1}/${parseDate(d).getDate()}${mode}</th>`;
   }).join("");
-  const hours = [...new Set(ids.flatMap((id) => searchResults[id].hours || HOURS))].sort((a, b) => a - b);
+  // Leading and trailing hours that no venue in view rents on any shown day (all 未開放租借, e.g. 06:00) are
+  // left out; hours in between stay, so the rows never skip an hour. This follows the data, so such an hour
+  // comes back once the site opens it.
+  let hours = [...new Set(ids.flatMap((id) => searchResults[id].hours || HOURS))].sort((a, b) => a - b);
+  const rented = (h) => base.dates.some((d) => { const c = availCell(d, h); return c.rented || c.unfinished; });
+  while (hours.length && !rented(hours[0])) hours.shift();
+  while (hours.length && !rented(hours[hours.length - 1])) hours.pop();
   const body = hours.map((h) => `<tr><th>${pad(h)}:00</th>${base.dates.map((d) => {
     const c = availCell(d, h);
     const where = (list) => (multi ? `<br><span style="font-weight:400">${list.map(([id]) => vShort(id)).join("・")}</span>` : "");
