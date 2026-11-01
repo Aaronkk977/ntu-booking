@@ -649,7 +649,7 @@ function renderHits() {
   const busy = robotData.book_job && robotData.book_job.running;
   $("hits").innerHTML = sorted.length ? sorted.map((h) => `
     <div class="hit ${h.status}">
-      <span class="pill ${h.status === "available" ? "ok" : "warn"}">${h.status === "available" ? "可訂" : "已沒了"}</span>
+      <span class="pill ${h.status === "available" ? "ok" : "warn"}">${h.status === "available" ? "可訂" : "售罄"}</span>
       <b>${fmtDate(h.date)} ${timeRange(h.hour, 1)}</b>
       <span>${venueName(h.venue)}${h.status === "available" ? `・線上 ${h.count} 面` : ""}</span>
       ${(h.filters || []).map((fid) => `<span class="tag">${escapeHtml(filterName(fid))}</span>`).join("")}
