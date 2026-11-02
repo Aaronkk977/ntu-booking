@@ -585,7 +585,8 @@ if __name__ == "__main__":
     ROBOT.reschedule()  # start scanning right away if any filter is enabled
     if session.has_session():  # a login saved hours ago has probably expired; find out before showing "logged in"
         threading.Thread(target=session.check, daemon=True).start()
-    print(f"臺大場地預約控制台：{url}  (Ctrl+C 結束)")
+    print(f"The console is running at {url}")
+    print("It opens in your browser. Keep this window open while you use it; close it to stop.")
     if "--no-browser" not in sys.argv:
         webbrowser.open(url)
     try:

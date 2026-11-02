@@ -13,12 +13,12 @@
 ## 需要
 
 - Windows 10 / 11（用內建的 Microsoft Edge），或 macOS（用 Edge 或 Chrome，都沒有的話第一次執行會自動下載 Chromium）
-- Python 3.10 以上（安裝時勾選 *Add python.exe to PATH*）
+- 網路連線（第一次執行要下載約 75 MB，約 1–3 分鐘）。**不用先裝 Python**
 - 臺大體育室租借系統的帳號
 
 ## 使用
 
-1. Windows：雙擊 `start.bat`。Mac：雙擊 `start.command`（第一次要按右鍵 →「打開」）。第一次執行會自動安裝 Playwright（用來操作瀏覽器）。
+1. Windows：雙擊 `start.bat`。Mac：雙擊 `start.command`（第一次要按右鍵 →「打開」）。第一次執行會自動安裝 [uv](https://docs.astral.sh/uv/)，再用它在資料夾裡的 `.venv` 準備好 Python 3.12 和 Playwright（用來操作瀏覽器），要等一兩分鐘；之後就直接啟動。
 2. 瀏覽器會開啟 <http://127.0.0.1:8765>。
 3. 第一次開啟會跳出「設定」，存好租借系統帳號密碼，再按上方「登入網站」。臺大信箱帳號（例：`b12345678@ntu.edu.tw`）會自動用同一組帳密走計中登入，不用確認碼；其他帳號會開瀏覽器視窗，輸入確認碼完成登入。
 4. 開始使用四個分頁。關掉 `start.bat` 的黑色視窗（Mac 是「終端機」視窗）就會停止。
@@ -40,10 +40,16 @@
 
 要分享給別人時，**不要**附上上面這些檔案。刪掉它們就等於回到全新狀態。
 
+## 執行環境
+
+- Python 和套件都在資料夾裡的 `.venv`，不會動到電腦上其他的 Python。刪掉 `.venv`，下次啟動會重新準備。
+- uv 裝在 `使用者資料夾\.localin`（Mac 是 `~/.local/bin`）。
+- 用的 Python 版本寫在 `start.bat` / `start.command` 開頭的 `PYTHON_VERSION`；改了之後下次啟動會自動換掉 `.venv`。
+- 也可以自己用 Python 3.10 以上執行 `python server.py`（要先 `pip install -r requirements.txt`）。
+
 ## Mac 的小提醒
 
 - 如果雙擊 `start.command` 出現「沒有權限」（例如從 Windows 壓縮傳過來的），在「終端機」輸入 `bash `（後面有空白），把 `start.command` 拖進去再按 Enter。
-- 第一次執行會在資料夾裡建一個 `.venv`，裝好的套件都在裡面；刪掉它下次會重裝。
 - 從 Windows 帶過來的 `credentials.json` 在 Mac 上解不開，要在「設定」重新輸入密碼。
 - 填表單時預訂視窗會先縮到 Dock，到確認頁才打開。如果沒有自己跳到最前面，到 Dock 點一下就好。
 
