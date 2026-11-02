@@ -9,6 +9,14 @@ if errorlevel 1 (
   exit /b 1
 )
 
+python -c "import sys; sys.exit(sys.version_info < (3, 10))" >nul 2>nul
+if errorlevel 1 (
+  echo This needs Python 3.10 or newer. Install it from https://www.python.org/downloads/
+  echo and tick "Add python.exe to PATH" during setup, then run this file again.
+  pause
+  exit /b 1
+)
+
 python -c "import playwright" >nul 2>nul
 if errorlevel 1 (
   echo First run: installing Playwright ...

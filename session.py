@@ -7,6 +7,7 @@ for the user to finish (the site's own form needs a captcha). The resulting cook
 User-Agent are saved to session.json and reused by the scanner.
 """
 import json
+import ssl
 import threading
 import time
 import urllib.request
@@ -21,6 +22,11 @@ SSO_HOST = "adfs.ntu.edu.tw"
 PROBE_PATH = "/order/A/"  # redirects to the login page when not logged in
 SESSION_FILE = Path(__file__).with_name("session.json")
 SNAPSHOT_DIR = Path(__file__).with_name("snapshots")
+
+# Python 3.13+ checks certificates strictly (VERIFY_X509_STRICT) and rejects the site's chain for a missing
+# Subject Key Identifier. Drop only that flag: the certificate is still verified as before 3.13.
+_SSL_CONTEXT = ssl.create_default_context()
+_SSL_CONTEXT.verify_flags &= ~ssl.VERIFY_X509_STRICT
 
 
 # "/order/?Add=<venue>" switches the venue stored in the server-side session, so only one
@@ -176,7 +182,7 @@ def fetch(path: str, form: str | None = None) -> str:
             "Referer": BASE + "/order/A/",
         })
     req = urllib.request.Request(BASE + path, data=form.encode("utf-8") if form is not None else None, headers=headers)
-    with urllib.request.urlopen(req, timeout=20) as res:
+    with urllib.request.urlopen(req, timeout=20, context=_SSL_CONTEXT) as res:
         html = res.read().decode("utf-8", errors="replace")
     if is_logged_out_page(html):
         SNAPSHOT_DIR.mkdir(exist_ok=True)
