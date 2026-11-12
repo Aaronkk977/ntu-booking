@@ -378,7 +378,7 @@ def auto_left(acct: session.Account) -> int:
     return max(0, AUTO_DAILY_LIMIT - done - running)
 
 
-_MODE_RANK = {"notify": 0, "prepare": 1, "auto": 2}
+_MODE_RANK = {"notify": 0, "auto": 1}
 
 
 def _on_new_hits(acct: session.Account, found: list[tuple[dict, list[dict]]]) -> None:
@@ -388,7 +388,7 @@ def _on_new_hits(acct: session.Account, found: list[tuple[dict, list[dict]]]) ->
     did = _discord_id(acct)
     bookable = can_book(acct)
     groups: dict[tuple, list[str]] = {}
-    started, book_buttons = None, []
+    started, book_buttons, full_noted = None, [], False
     venues = list(dict.fromkeys(hit["venue"] for hit, _ in found))
     for hit, filters in found:
         label = slot_label(hit["venue"], hit["date"], hit["hour"])
@@ -397,18 +397,16 @@ def _on_new_hits(acct: session.Account, found: list[tuple[dict, list[dict]]]) ->
         line = f"{hit['hour']:02d}:00–{hit['hour'] + 1:02d}:00（{hit['count']} 面）"
         mode = max((robot.filter_mode(f) for f in filters), key=_MODE_RANK.get, default="notify")
         quantity = robot.clamp_want(hit.get("want"), hit.get("count", 1))
-        if started is None and mode != "notify" and bookable and not booker.busy(acct):
-            left = auto_left(acct) if mode == "auto" else 0
-            if mode == "auto" and left:
+        if started is None and mode == "auto" and bookable and not booker.busy(acct):
+            left = auto_left(acct)
+            if left:
                 start_prep(acct, hit["venue"], hit["date"], hit["hour"], min(quantity, left), auto=True)
-                line += " ← 🤖 自動送出中…"
-            else:
-                start_prep(acct, hit["venue"], hit["date"], hit["hour"], quantity)
-                line += " ← 正在幫你填到學校確認頁…"
-                if mode == "auto":
-                    line += f"（今天自動送出已滿 {AUTO_DAILY_LIMIT} 面，這筆要你確認）"
-            started = hit
-        elif bookable:
+                line += " ← 🤖 自動預訂中…"
+                started = hit
+            elif not full_noted:
+                full_noted = True
+                line += f"（今天自動預訂已滿 {AUTO_DAILY_LIMIT} 面，要的話按「預訂」）"
+        if hit is not started and bookable:
             where = f"{VENUE_NAMES.get(hit['venue'], hit['venue'])} " if len(venues) > 1 else ""
             book_buttons.append(notify.button(f"預訂 {where}{day_label(hit['date'])} {hit['hour']:02d}:00",
                                               f"hit:book:{hit['id']}", 1))
@@ -1171,9 +1169,10 @@ class Handler(BaseHTTPRequestHandler):
         if current:
             return self._json({"error": "你已經有一筆預訂在進行中", "prep": current.id}, 409)
         if not can_book(acct):
-            return self._error(400, "要先在「設定」連結計中帳號，伺服器才能幫你準備預訂；也可以直接到學校網站訂"
+            return self._error(400, "要先在「設定」連結計中帳號，伺服器才能幫你預訂；也可以直接到學校網站訂"
                                if not acct.school else "學校網站的登入已過期，請在「設定」重新登入計中帳號")
-        prep = start_prep(acct, venue, day, hour, quantity)
+        # Pressing 預訂 on the page is the go-ahead: book straight away, nothing waits at the confirmation page.
+        prep = start_prep(acct, venue, day, hour, quantity, auto=True, by_tap=True)
         return self._json({"ok": True, "prep": prep.id})
 
     # --- DELETE ---

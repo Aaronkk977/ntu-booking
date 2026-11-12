@@ -68,19 +68,17 @@ def clean_filter(body: dict, venue_ids: list[str]) -> dict:
     }
 
 
-MODES = ("notify", "prepare", "auto")
+MODES = ("notify", "auto")
 
 
 def filter_mode(f: dict) -> str:
     """What happens when a filter finds a slot:
-    notify  - a message with 預訂 buttons; nothing is filled until a button is pressed
-    prepare - fill up to the school's confirmation page at once; 確認送出 is left to the person
-    auto    - fill and send at once (server.AUTO_DAILY_LIMIT courts a day), then report
-    Filters from before modes have only auto_prepare (True -> prepare)."""
-    mode = f.get("mode")
-    if mode in MODES:
-        return mode
-    return "prepare" if f.get("auto_prepare", True) else "notify"
+    notify - a message with a 預訂 button per slot; pressing one books it
+    auto   - book it at once (server.AUTO_DAILY_LIMIT courts a day), then report
+    Nothing is ever held open at the school's confirmation page waiting for a tap: that would keep the
+    account (and, for the scan account, everybody's robot) waiting. Older filters ("prepare", or only
+    auto_prepare) become notify."""
+    return "auto" if f.get("mode") == "auto" else "notify"
 
 
 def is_active(f: dict) -> bool:

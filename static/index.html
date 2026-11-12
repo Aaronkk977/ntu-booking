@@ -312,7 +312,7 @@
       <p class="hint" id="loginMsg"></p>
     </form>
   </section>
-  <p class="hint">只限管理者加入名單的計中帳號。伺服器會真的用這組帳密登入學校的租借系統。記住密碼的話，它會加密存在伺服器上，讓伺服器在學校登入過期（約 1–2 小時）時自己重新登入、幫你準備預訂；伺服器管理者仍有辦法讀到。不記住的話，伺服器只能在這段時間內幫你預訂，之後只會通知。</p>
+  <p class="hint">只限管理者加入名單的計中帳號。伺服器會真的用這組帳密登入學校的租借系統。記住密碼的話，它會加密存在伺服器上，讓伺服器在學校登入過期（約 1–2 小時）時自己重新登入、幫你預訂；伺服器管理者仍有辦法讀到。不記住的話，伺服器只能在這段時間內幫你預訂，之後只會通知。</p>
   </details>
 </div>
 
@@ -387,9 +387,8 @@
         <div class="group"><span class="label">名稱</span><input id="fName" type="text" class="compact" maxlength="30"></div>
         <label class="switch"><input type="checkbox" id="watchEnabled"><span class="track"></span><span id="watchLabel">已停用</span></label>
         <div class="group"><span class="label">找到時</span><select id="watchMode" class="compact">
-          <option value="notify">只通知（附預訂按鈕）</option>
-          <option value="prepare">先填好，我按確認送出</option>
-          <option value="auto">直接送出</option></select></div>
+          <option value="notify">通知我（按預訂才訂）</option>
+          <option value="auto">直接訂</option></select></div>
         <button type="button" class="small danger" id="fDelete">刪除濾網</button>
       </div>
       <p class="hint" id="watchModeHint"></p>
@@ -519,9 +518,9 @@
   <label class="field"><span>面數</span>
     <input id="bookQty" type="number" min="1" value="1"></label>
   <p class="hint members-line" id="bookMembers"></p>
-  <div class="actions"><button type="button" class="primary" id="bookGo">準備預訂</button>
+  <div class="actions"><button type="button" class="primary" id="bookGo">預訂</button>
     <a class="btnlink" id="bookSchool" target="_blank" rel="noopener">到學校網站預訂</a></div>
-  <p class="hint" id="bookHint">伺服器會幫你填到學校的確認頁，你看過內容再按「確認送出」才會真的下單；繳費請自己到學校網站。</p>
+  <p class="hint" id="bookHint">按「預訂」就直接下單；訂到後請在期限內繳費，不要的話到「訂單」取消。</p>
 </dialog>
 
 <div class="toast" id="toast"></div>
@@ -588,7 +587,7 @@ function renderMe() {
   $("meLine").innerHTML = `${me.discord_account ? "Discord 帳號" : "計中帳號"} <b>${escapeHtml(me.display)}</b>${me.admin ? "（管理者）" : ""}`;
   $("schoolState").innerHTML = !me.school ? '<span class="pill info">還沒連結：只收通知，自己到學校網站訂</span>'
     : `<span class="pill ok">已連結 ${escapeHtml(me.school)}</span> ${me.has_password ? '<span class="pill ok">伺服器記住密碼</span>' : '<span class="pill warn">沒有儲存密碼</span>'}`;
-  $("schoolHint").textContent = !me.school ? "連結後，找到空位時伺服器可以先幫你填到學校確認頁，你只要按確認送出；也能在這裡看訂單。"
+  $("schoolHint").textContent = !me.school ? "連結後，伺服器可以幫你訂：按通知裡的「預訂」，或讓濾網找到就直接訂；也能在這裡看訂單、取消訂單。"
     : me.has_password ? "要換密碼或重新登入學校網站，在這裡再輸入一次。" : "沒有儲存密碼：學校登入約 1–2 小時就會過期，過期後在這裡再登入一次。";
   if (document.activeElement !== $("schoolAccount")) $("schoolAccount").value = me.school || "";
   $("schoolAccount").readOnly = !!me.school;
@@ -596,9 +595,8 @@ function renderMe() {
   $("schoolActions").hidden = !me.school;
   $("schoolForget").hidden = !me.has_password;
   $("schoolUnlink").hidden = !me.discord_account;
-  $("watchAuto").disabled = !me.can_book;
-  $("watchAuto").closest("label").title = me.can_book ? "找到空位時，伺服器先填到學校確認頁，你只要按確認送出"
-    : "連結計中帳號（並讓伺服器記住密碼）後才能用";
+  $("watchMode").querySelector('option[value="auto"]').disabled = !me.can_book;
+  $("watchMode").title = me.can_book ? "" : "「直接訂」要先連結計中帳號（並讓伺服器記住密碼）";
   $("meLoginError").hidden = !me.login_error;
   $("meLoginError").textContent = me.login_error || "";
   if (document.activeElement !== $("discordId")) $("discordId").value = me.discord_id || "";
@@ -745,7 +743,7 @@ $("clearLogView").onclick = () => { logCutoff = refreshLogs.total || 0; refreshL
 /* ---------- robot: filters (weekly timetables) + auto hit list ---------- */
 const DAY_LABELS = ["週一", "週二", "週三", "週四", "週五", "週六", "週日"]; // index = Python weekday
 let HOURS = []; // every start hour any venue's timetable has, from the server
-const EMPTY_FILTER = { id: null, name: "", enabled: false, venues: [], slots: {}, mode: "prepare" };
+const EMPTY_FILTER = { id: null, name: "", enabled: false, venues: [], slots: {}, mode: "notify" };
 let robotData = { state: {}, filters: [], hits: [] };
 let watch = EMPTY_FILTER; // the filter being edited (heatmap clicks also edit this one)
 let bookDates = {}; // weekday -> ISO date currently inside the online booking window
@@ -823,7 +821,7 @@ function renderFilterEditor() {
       <span>${v.name}・${v.sport}</span></label>`).join("");
   $("watchEnabled").checked = watch.enabled;
   $("watchLabel").textContent = watch.enabled ? "啟用中" : "已停用";
-  $("watchMode").value = watch.mode || (watch.auto_prepare === false ? "notify" : "prepare");
+  $("watchMode").value = (watch.mode === "auto" ? "auto" : "notify");
   renderModeHint();
   renderWeek();
 }
@@ -875,7 +873,7 @@ function renderHits() {
       ${h.status === "available" ? `<label class="want">預訂
         <input type="number" min="1" max="${h.count}" value="${Math.min(h.want || 1, h.count)}" data-want="${h.id}" ${busy ? "disabled" : ""}>
         面</label>
-        ${me && me.can_book ? `<button type="button" class="small primary" data-book="${h.id}" ${busy ? "disabled" : ""}>準備預訂</button>`
+        ${me && me.can_book ? `<button type="button" class="small primary" data-book="${h.id}" ${busy ? "disabled" : ""}>預訂</button>`
           : `<a class="btnlink primary" href="${schoolUrl(h.venue)}" target="_blank" rel="noopener">到學校網站訂</a>`}` : ""}
       <button type="button" class="small ghost" data-dismiss="${h.id}" title="從清單移除">✕</button>
       </span>
@@ -950,15 +948,14 @@ $("fName").oninput = () => { watch.name = $("fName").value; saveWatch(); };
 function renderModeHint() {
   const mode = $("watchMode").value, d = robotData;
   $("watchModeHint").textContent = {
-    notify: "找到空位只私訊通知；按訊息裡的「預訂」才開始幫你填。",
-    prepare: "找到空位就先填到學校確認頁，你在 Discord 按「確認送出」才會送出。",
-    auto: `找到空位就直接送出訂單，不再問你；每天最多 ${d.auto_limit ?? 3} 面（今天還剩 ${d.auto_left ?? "?"} 面），超過就改成要你確認。訂到後記得繳費，不要的話用訊息裡的「取消訂單」。`,
+    notify: "找到空位私訊通知你，每個時段附一顆「預訂」按鈕，按了就直接訂。",
+    auto: `找到空位就直接訂，不再問你；每天最多 ${d.auto_limit ?? 3} 面（今天還剩 ${d.auto_left ?? "?"} 面），超過就改成通知你自己按「預訂」。訂到後記得繳費，不要的話用訊息裡的「取消訂單」。`,
   }[mode];
 }
 $("watchMode").onchange = () => {
   const mode = $("watchMode").value;
-  if (mode === "auto" && !confirm("找到空位就直接送出訂單、不再問你，訂到就要繳費或取消。確定要開？")) {
-    $("watchMode").value = watch.mode || (watch.auto_prepare === false ? "notify" : "prepare");
+  if (mode === "auto" && !confirm("找到空位就直接訂、不再問你，訂到就要繳費或取消。確定要開？")) {
+    $("watchMode").value = (watch.mode === "auto" ? "auto" : "notify");
     return;
   }
   watch.mode = mode;
@@ -981,7 +978,7 @@ $("filterTabs").onclick = async (e) => {
   if (tab.id === "fAdd") {
     try {
       const f = await api("/api/robot/filters", { method: "POST", body: JSON.stringify({
-        name: `濾網 ${robotData.filters.length + 1}`, enabled: false, venues: [searchSel[0] || venues[0].id], slots: {}, mode: "prepare",
+        name: `濾網 ${robotData.filters.length + 1}`, enabled: false, venues: [searchSel[0] || venues[0].id], slots: {}, mode: "notify",
       }) });
       robotData.filters.push(f);
       selectFilter(f.id);
@@ -1007,9 +1004,11 @@ $("scanBtn").onclick = guard(async () => { await api("/api/robot/scan", { method
 $("hits").onclick = guard(async (e) => {
   const book = e.target.dataset.book, dismiss = e.target.dataset.dismiss;
   if (book) {
+    const h = robotData.hits.find((x) => x.id === book);
+    if (h && !confirm(`直接預訂 ${venueName(h.venue)} ${fmtDate(h.date)} ${timeRange(h.hour, 1)}（${h.want || 1} 面）？\n訂到後要在期限內繳費，不要的話再取消。`)) return;
     try {
       const r = await api(`/api/robot/hits/${book}/book`, { method: "POST" });
-      toast("正在幫你填到學校確認頁…");
+      toast("正在幫你訂…");
       location.hash = `#prep/${r.prep}`;
     } catch (err) { toast(err.message, true); }
     loadPreps(); refreshRobot(); refreshLogs();
@@ -1328,7 +1327,7 @@ function openBook(day, h) {
   $("bookMembers").innerHTML = `${membersText()} <button type="button" class="small ghost" data-open-settings>修改</button>`;
   $("bookGo").hidden = !me.can_book;
   $("bookQty").closest("label").hidden = $("bookMembers").hidden = !me.can_book;
-  $("bookHint").textContent = me.can_book ? "伺服器會幫你填到學校的確認頁，你看過內容再按「確認送出」才會真的下單；繳費請自己到學校網站。"
+  $("bookHint").textContent = me.can_book ? "按「預訂」就直接下單；訂到後請在期限內繳費，不要的話到「訂單」取消。"
     : "在學校網站登入後選這個時段預訂。想讓伺服器幫你填好，請到「設定」連結計中帳號。";
   $("bookSchool").href = schoolUrl($("bookVenue").value);
   $("availTip").hidden = true;
@@ -1347,7 +1346,7 @@ $("bookGo").onclick = guard(async () => {
   const r = await api("/api/book", { method: "POST", body: JSON.stringify({
     venue: $("bookVenue").value, date: bookTarget.day, hour: bookTarget.h, quantity: qty }) });
   $("bookDialog").close();
-  toast("正在幫你填到學校確認頁…");
+  toast("正在幫你訂…");
   location.hash = `#prep/${r.prep}`;
   loadPreps(); refreshLogs();
 });
