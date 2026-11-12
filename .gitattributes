@@ -1,3 +1,4 @@
-# start.command must keep LF line endings, even when this folder is zipped on Windows
-*.command text eol=lf
+# Shell scripts run on Linux and must keep LF line endings, even when checked out or zipped on Windows.
+*.sh text eol=lf
+deploy/env.example text eol=lf
 *.bat text eol=crlf

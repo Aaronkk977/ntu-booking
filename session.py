@@ -1,53 +1,49 @@
-"""Logged-in session for rent.pe.ntu.edu.tw.
+"""Logged-in sessions for rent.pe.ntu.edu.tw, one per person (Account).
 
-Login goes through NTU's 計中 SSO (adfs.ntu.edu.tw, no captcha) in a hidden browser window when the saved
-account is an @ntu.edu.tw address, so it can also run unattended when the login expires. Otherwise, or
-when that fails, a visible browser window opens with the stored username and password pre-filled and waits
-for the user to finish (the site's own form needs a captcha). The resulting cookies and the browser's
-User-Agent are saved to session.json and reused by the scanner.
+Login goes through NTU's 計中 SSO (adfs.ntu.edu.tw, no captcha) in a headless browser, so it also runs
+unattended when a login expires. The resulting cookies and the browser's User-Agent are saved to
+data/users/<account>/session.json and reused for plain HTTP requests.
+
+"/order/?Add=<venue>" switches the venue stored in the site's server-side session, so each Account has
+its own lock: only one venue walk or booking per account talks to the site at a time.
 """
 import json
 import ssl
 import threading
 import time
 import urllib.request
-from pathlib import Path
 from urllib.parse import urlparse
+
+import config
+import credentials
 
 HOST = "rent.pe.ntu.edu.tw"
 BASE = f"https://{HOST}"
-LOGIN_URL = f"{BASE}/member/?U=login"
 SSO_URL = f"{BASE}/sso2_go.php"  # the site's 「計資中心帳號認證登入」 link; redirects to adfs.ntu.edu.tw
 SSO_HOST = "adfs.ntu.edu.tw"
 PROBE_PATH = "/order/A/"  # redirects to the login page when not logged in
-SESSION_FILE = Path(__file__).with_name("session.json")
-SNAPSHOT_DIR = Path(__file__).with_name("snapshots")
+SNAPSHOT_DIR = config.SNAPSHOT_DIR
 
 # Python 3.13+ checks certificates strictly (VERIFY_X509_STRICT) and rejects the site's chain for a missing
 # Subject Key Identifier. Drop only that flag: the certificate is still verified as before 3.13.
 _SSL_CONTEXT = ssl.create_default_context()
 _SSL_CONTEXT.verify_flags &= ~ssl.VERIFY_X509_STRICT
 
+# Playwright's own Chromium first (what deploy/setup.sh installs on Linux), then Edge / Chrome (a Windows
+# or Mac machine used for development).
+BROWSER_CHANNELS = (None, "msedge", "chrome")
 
-# "/order/?Add=<venue>" switches the venue stored in the server-side session, so only one
-# venue walk (scan, search, history) may talk to the site at a time.
-SITE_LOCK = threading.Lock()
-# Set while a booking waits for SITE_LOCK. Walks over many courts (robot, search, history) stop at the next
-# court and let it go first, instead of making the user wait out a whole venue.
-BOOKING_WAITING = threading.Event()
-
-
-# Edge first (it comes with Windows), then Chrome; None is Playwright's own Chromium, for a Mac with
-# neither (`python -m playwright install chromium`).
-BROWSER_CHANNELS = ("msedge", "chrome", None)
+# After a failed unattended login, wait this long before trying again, so a wrong or changed password is
+# not retried until the 計中 account locks.
+RELOGIN_COOLDOWN_S = 10 * 60
 
 
 def launch_browser(p, **kwargs):
-    """Launch the first installed browser of BROWSER_CHANNELS with Playwright `p`."""
+    """Launch the first installed browser of BROWSER_CHANNELS with Playwright `p` (always headless)."""
     last = None
     for channel in BROWSER_CHANNELS:
         try:
-            return p.chromium.launch(channel=channel, **kwargs)
+            return p.chromium.launch(channel=channel, headless=True, **kwargs)
         except Exception as e:  # playwright's Error: this one is not installed
             last = e
     raise last
@@ -61,12 +57,6 @@ class Preempted(Exception):
     """A venue walk stopped early so that a booking could use the site."""
 
 
-def pause(seconds: float) -> None:
-    """The polite gap between requests of a venue walk. Raises Preempted at once if a booking is waiting."""
-    if BOOKING_WAITING.wait(seconds):
-        raise Preempted("讓預訂先使用網站")
-
-
 def is_logged_out_page(html: str) -> bool:
     # The "not logged in" response is a tiny page whose only job is alert() + redirect.
     return "請登入會員" in html and len(html) < 2000
@@ -77,18 +67,12 @@ def _domain_matches(cookie_domain: str) -> bool:
     return HOST == d or HOST.endswith("." + d)
 
 
-def sso_username(account: str) -> str | None:
-    """The 計中 account behind a rent-system login like b12345678@ntu.edu.tw; None for other accounts."""
-    name, _, domain = account.strip().partition("@")
-    return name if name and domain.lower() == "ntu.edu.tw" else None
-
-
 def _wait_logged_in(page, ctx, timeout_s: float) -> bool:
     """Poll until the site itself answers a members-only page. Leaving the login page is not proof of
     login (the SSO link leaves it too)."""
     deadline = time.monotonic() + timeout_s
     while time.monotonic() < deadline:
-        page.wait_for_timeout(1500)  # raises if the user closed the window
+        page.wait_for_timeout(1500)
         if urlparse(page.url).hostname != HOST or "U=login" in page.url:
             continue
         if not is_logged_out_page(ctx.request.get(BASE + PROBE_PATH).text()):
@@ -96,97 +80,143 @@ def _wait_logged_in(page, ctx, timeout_s: float) -> bool:
     return False
 
 
-def _save_session(ctx, user_agent: str) -> None:
-    cookies = [c for c in ctx.cookies() if _domain_matches(c["domain"])]
-    SESSION_FILE.write_text(json.dumps({"user_agent": user_agent, "cookies": cookies}, ensure_ascii=False, indent=2),
-                            encoding="utf-8")
+def _err(e: Exception) -> str:
+    return f"{e.__class__.__name__}: {str(e).splitlines()[0] if str(e) else ''}"
 
 
-def sso_login(sso_user: str, password: str, timeout_s: int = 60) -> None:
-    """Log in through 計中 SSO in a hidden browser window. Raises NotLoggedIn when it does not end logged in
-    (wrong password, or an extra step such as a verification code that needs a person)."""
-    from playwright.sync_api import sync_playwright
+class Account:
+    def __init__(self, name: str):
+        self.name = name
+        self.dir = config.user_dir(name)
+        self.session_file = self.dir / "session.json"
+        self.site_lock = threading.Lock()
+        # Set while a booking waits for site_lock. Walks over many courts stop at the next court and let it
+        # go first, instead of making the person wait out a whole venue.
+        self.booking_waiting = threading.Event()
+        self._relogin_lock = threading.Lock()
+        self._relogin_failed_at = 0.0
+        self.login_error: str | None = None  # the last unattended login failure, shown in the UI
 
-    with sync_playwright() as p:
-        browser = launch_browser(p, headless=True)
+    def __repr__(self):
+        return f"Account({self.name})"
+
+    # ---------- login ----------
+
+    def sso_login(self, password: str, timeout_s: int = 60) -> None:
+        """Log in through 計中 SSO in a headless browser. Raises NotLoggedIn when it does not end logged in
+        (wrong password, or an extra step such as a verification code that needs a person)."""
+        from playwright.sync_api import sync_playwright
+
+        with sync_playwright() as p:
+            browser = launch_browser(p)
+            try:
+                # Save the User-Agent of a normal window, not the headless one, for the plain requests.
+                probe = browser.new_page()
+                ua = probe.evaluate("navigator.userAgent").replace("HeadlessEdg", "Edg").replace("HeadlessChrome", "Chrome")
+                probe.close()
+                ctx = browser.new_context(user_agent=ua)
+                page = ctx.new_page()
+                page.goto(SSO_URL)
+                page.wait_for_url(lambda u: urlparse(u).hostname == SSO_HOST, timeout=20000)
+                page.fill('input[name$="UsernameTextBox"]', self.name)
+                page.fill('input[name$="PasswordTextBox"]', password)
+                page.click('input[name$="SubmitButton"]')
+                if not _wait_logged_in(page, ctx, timeout_s):
+                    SNAPSHOT_DIR.mkdir(parents=True, exist_ok=True)
+                    (SNAPSHOT_DIR / f"_sso_failed_{self.name}.html").write_text(page.content(), encoding="utf-8")
+                    stuck = "停在計中登入頁，可能是帳號密碼錯誤" if urlparse(page.url).hostname == SSO_HOST else "沒有回到租借系統"
+                    raise NotLoggedIn(f"計中帳號登入沒有成功（{stuck}）")
+                cookies = [c for c in ctx.cookies() if _domain_matches(c["domain"])]
+                config.write_json(self.session_file, {"user_agent": ua, "cookies": cookies})
+            finally:
+                browser.close()
+        self.login_error = None
+        self._relogin_failed_at = 0.0
+
+    def relogin(self) -> bool:
+        """Log in again unattended with the stored password. False (without trying) during the cooldown
+        after a failure, or when no password is stored."""
+        with self._relogin_lock:
+            if self.has_session():  # another thread logged in again while this one waited
+                return True
+            if time.monotonic() - self._relogin_failed_at < RELOGIN_COOLDOWN_S and self._relogin_failed_at:
+                return False
+            password = credentials.load(self.name)
+            if not password:
+                self.login_error = "伺服器上沒有你的密碼，請重新登入這個網站"
+                return False
+            try:
+                self.sso_login(password)
+                return True
+            except Exception as e:
+                self._relogin_failed_at = time.monotonic()
+                self.login_error = (f"自動重新登入學校網站失敗（{_err(e)}），{RELOGIN_COOLDOWN_S // 60} 分鐘後再試；"
+                                    "改過計中密碼的話請登出再登入這個網站")
+                return False
+
+    def with_relogin(self, fn):
+        """fn(), retried once after an unattended re-login if it found the login expired."""
         try:
-            # Save the User-Agent of a normal window, not the headless one, for the scanner's requests.
-            probe = browser.new_page()
-            ua = probe.evaluate("navigator.userAgent").replace("HeadlessEdg", "Edg").replace("HeadlessChrome", "Chrome")
-            probe.close()
-            ctx = browser.new_context(user_agent=ua)
-            page = ctx.new_page()
-            page.goto(SSO_URL)
-            page.wait_for_url(lambda u: urlparse(u).hostname == SSO_HOST, timeout=20000)
-            page.fill('input[name$="UsernameTextBox"]', sso_user)
-            page.fill('input[name$="PasswordTextBox"]', password)
-            page.click('input[name$="SubmitButton"]')
-            if not _wait_logged_in(page, ctx, timeout_s):
-                SNAPSHOT_DIR.mkdir(exist_ok=True)
-                (SNAPSHOT_DIR / "_sso_failed.html").write_text(page.content(), encoding="utf-8")
-                stuck = "停在計中登入頁，可能是帳號密碼錯誤" if urlparse(page.url).hostname == SSO_HOST else "沒有回到租借系統"
-                raise NotLoggedIn(f"計中帳號登入沒有成功（{stuck}，頁面已存到 snapshots/）")
-            _save_session(ctx, ua)
-        finally:
-            browser.close()
+            return fn()
+        except NotLoggedIn:
+            if not self.relogin():
+                raise
+            return fn()
+
+    def has_session(self) -> bool:
+        """True while a login is saved. An expired login is deleted as soon as the site reports it."""
+        return self.session_file.exists()
+
+    def clear(self) -> None:
+        self.session_file.unlink(missing_ok=True)
+
+    def check(self) -> None:
+        """Ask the site once whether the saved login still works (deletes it if not)."""
+        try:
+            self.fetch(PROBE_PATH)
+        except (NotLoggedIn, OSError):  # offline: leave it to the next real request
+            pass
+
+    # ---------- requests ----------
+
+    def pause(self, seconds: float) -> None:
+        """The polite gap between requests of a venue walk. Raises Preempted at once if a booking is waiting."""
+        if self.booking_waiting.wait(seconds):
+            raise Preempted("讓預訂先使用網站")
+
+    def saved(self) -> tuple[str, list[dict]]:
+        """(User-Agent, cookies) of the saved login."""
+        if not self.session_file.exists():
+            raise NotLoggedIn("尚未登入學校網站")
+        data = json.loads(self.session_file.read_text(encoding="utf-8"))
+        return data["user_agent"], [c for c in data["cookies"] if _domain_matches(c["domain"])]
+
+    def fetch(self, path: str, form: str | None = None) -> str:
+        """GET (or POST `form`, an urlencoded body) with the saved cookies. Raises NotLoggedIn when expired."""
+        ua, cookies = self.saved()
+        headers = {"User-Agent": ua, "Cookie": "; ".join(f"{c['name']}={c['value']}" for c in cookies)}
+        if form is not None:
+            headers.update({
+                "Content-Type": "application/x-www-form-urlencoded",
+                "X-Requested-With": "XMLHttpRequest",
+                "Referer": BASE + "/order/A/",
+            })
+        req = urllib.request.Request(BASE + path, data=form.encode("utf-8") if form is not None else None, headers=headers)
+        with urllib.request.urlopen(req, timeout=20, context=_SSL_CONTEXT) as res:
+            html = res.read().decode("utf-8", errors="replace")
+        if is_logged_out_page(html):
+            self.clear()
+            raise NotLoggedIn("學校網站的登入已過期")
+        return html
 
 
-def interactive_login(username: str, password: str, timeout_s: int = 300) -> None:
-    from playwright.sync_api import sync_playwright
-
-    with sync_playwright() as p:
-        browser = launch_browser(p, headless=False)
-        ctx = browser.new_context()
-        page = ctx.new_page()
-        page.goto(LOGIN_URL)
-        page.fill("#Username_login", username)
-        page.fill("#Password_login", password)
-        page.focus("#UserInputNo_login")
-        if not _wait_logged_in(page, ctx, timeout_s):
-            raise TimeoutError("5 分鐘內未完成登入")
-        _save_session(ctx, page.evaluate("navigator.userAgent"))
-        browser.close()
+_accounts: dict[str, Account] = {}
+_accounts_lock = threading.Lock()
 
 
-def has_session() -> bool:
-    """True while a login is saved. An expired login is deleted as soon as the site reports it."""
-    return SESSION_FILE.exists()
-
-
-def check() -> None:
-    """Ask the site once whether the saved login still works (deletes it if not)."""
-    try:
-        fetch(PROBE_PATH)
-    except (NotLoggedIn, OSError):  # offline: leave it to the next real request
-        pass
-
-
-def clear() -> None:
-    SESSION_FILE.unlink(missing_ok=True)
-
-
-def fetch(path: str, form: str | None = None) -> str:
-    """GET (or POST `form`, an urlencoded body) with the saved cookies.
-
-    Raises NotLoggedIn when the session expired.
-    """
-    if not SESSION_FILE.exists():
-        raise NotLoggedIn("尚未登入")
-    data = json.loads(SESSION_FILE.read_text(encoding="utf-8"))
-    cookies = [c for c in data["cookies"] if _domain_matches(c["domain"])]
-    headers = {"User-Agent": data["user_agent"], "Cookie": "; ".join(f"{c['name']}={c['value']}" for c in cookies)}
-    if form is not None:
-        headers.update({
-            "Content-Type": "application/x-www-form-urlencoded",
-            "X-Requested-With": "XMLHttpRequest",
-            "Referer": BASE + "/order/A/",
-        })
-    req = urllib.request.Request(BASE + path, data=form.encode("utf-8") if form is not None else None, headers=headers)
-    with urllib.request.urlopen(req, timeout=20, context=_SSL_CONTEXT) as res:
-        html = res.read().decode("utf-8", errors="replace")
-    if is_logged_out_page(html):
-        SNAPSHOT_DIR.mkdir(exist_ok=True)
-        (SNAPSHOT_DIR / "_logged_out.html").write_text(html, encoding="utf-8")
-        clear()  # so the header stops showing "logged in"
-        raise NotLoggedIn("登入已過期")
-    return html
+def account(name: str) -> Account:
+    """The one Account object of `name` (its locks must be shared by every thread)."""
+    with _accounts_lock:
+        if name not in _accounts:
+            _accounts[name] = Account(name)
+        return _accounts[name]

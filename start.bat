@@ -18,7 +18,7 @@ set "SETUP="
 if not exist .venv\Scripts\python.exe set "SETUP=1"
 if defined REBUILD set "SETUP=1"
 if not defined SETUP (
-  .venv\Scripts\python.exe -c "import playwright" >nul 2>nul
+  .venv\Scripts\python.exe -c "import playwright, cryptography" >nul 2>nul
   if errorlevel 1 set "SETUP=1"
 )
 
@@ -61,7 +61,7 @@ if not exist .venv\Scripts\python.exe (
   )
 )
 
-.venv\Scripts\python.exe -c "import playwright" >nul 2>nul
+.venv\Scripts\python.exe -c "import playwright, cryptography" >nul 2>nul
 if errorlevel 1 (
   echo Installing Playwright, the largest download ...
   uv pip install --python .venv\Scripts\python.exe -r requirements.txt
@@ -78,6 +78,6 @@ if defined SETUP (
   echo Setup complete. Next time the console starts right away.
   echo.
 )
-echo Starting the console ...
+echo Starting the server for local testing at http://127.0.0.1:8765 ...
 .venv\Scripts\python.exe server.py
 pause

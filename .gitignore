@@ -1,3 +1,10 @@
+# Everything the service stores (passwords, logins, everybody's filters) lives in data/.
+data/
+deploy/env
+__pycache__/
+*.zip
+.venv/
+# files of the desktop version (desktop-v1), in case an old copy is still around
 credentials.json
 session.json
 tasks.json
@@ -6,8 +13,5 @@ robot.json
 hits.json
 search_cache.json
 history_stats.json
-snapshots/
-__pycache__/
-*.zip
-.venv/
 orders.json
+snapshots/

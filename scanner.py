@@ -7,9 +7,9 @@ import json
 import re
 import threading
 from datetime import date, datetime, timedelta
-from pathlib import Path
 from urllib.parse import urlencode
 
+import config
 import session
 
 BOOK_WINDOW = (3, 7)  # bookable days ahead, inclusive
@@ -71,14 +71,14 @@ def _epoch(d: date) -> int:
     return int(datetime.combine(d, datetime.min.time()).timestamp())
 
 
-def open_venue(venue: str) -> tuple[list[tuple[str, str]], str, str]:
+def open_venue(acct: session.Account, venue: str) -> tuple[list[tuple[str, str]], str, str]:
     """Select `venue` in the server-side session. Returns (courts, SK token, order page HTML); the order page
-    already shows the first court's schedule. Callers must hold session.SITE_LOCK."""
+    already shows the first court's schedule. Callers must hold acct.site_lock."""
     # ?Add= selects the venue in the server-side session, then /order/A/ shows its first court.
-    session.fetch(f"/order/?Add={venue}")
-    session.pause(1)
-    page = session.fetch("/order/A/")
-    session.SNAPSHOT_DIR.mkdir(exist_ok=True)
+    acct.fetch(f"/order/?Add={venue}")
+    acct.pause(1)
+    page = acct.fetch("/order/A/")
+    session.SNAPSHOT_DIR.mkdir(parents=True, exist_ok=True)
     (session.SNAPSHOT_DIR / f"{venue.replace(':', '_')}_order.html").write_text(page, encoding="utf-8")
     courts, sk = parse_order_page(page)
     if not courts:
@@ -86,20 +86,20 @@ def open_venue(venue: str) -> tuple[list[tuple[str, str]], str, str]:
     return courts, sk, page
 
 
-def fetch_schedule(court_id: str, sk: str, start: date, end: date) -> str:
+def fetch_schedule(acct: session.Account, court_id: str, sk: str, start: date, end: date) -> str:
     """Schedule markup of one court of the venue opened by open_venue(), from `start` to `end`."""
     form = urlencode({
         "VenuesSN": court_id, "OrderSource": "Order", "BookingType": "", "Booking": "Y",
         "OrderSN": "", "OrderType": "A", "SDMK": _epoch(start), "EDMK": _epoch(end),
         "ViewStatus": "undefined",
     }) + "&EnV=" + sk  # SK is already URL-encoded in the page, send it as-is like the site's JS
-    return json.loads(session.fetch("/__/f/Schedule.php", form)).get("ScheduleList", "")
+    return json.loads(acct.fetch("/__/f/Schedule.php", form)).get("ScheduleList", "")
 
 
 # Cache of the last full walk per venue (all courts, today .. BOOK_WINDOW[1]), shared by search and
 # the robot, persisted so a restart doesn't force a re-fetch. Court names stay in here for a future
 # order step; the UI only ever receives counts.
-CACHE_FILE = Path(__file__).with_name("search_cache.json")
+CACHE_FILE = config.DATA / "search_cache.json"
 CACHE_MAX_AGE_S = 10 * 60
 _cache_lock = threading.Lock()
 
@@ -111,7 +111,7 @@ def cache_put(venue: str, courts: list[tuple[str, dict]]) -> None:
             "fetched": datetime.now().isoformat(timespec="seconds"),
             "courts": [[name, {f"{d}|{h}": st for (d, h), st in slots.items()}] for name, slots in courts],
         }
-        CACHE_FILE.write_text(json.dumps(data, ensure_ascii=False), encoding="utf-8")
+        config.write_json(CACHE_FILE, data)
 
 
 def cache_get(venue: str, max_age_s: float) -> tuple[list[tuple[str, dict]], datetime] | None:
@@ -129,16 +129,17 @@ def cache_get(venue: str, max_age_s: float) -> tuple[list[tuple[str, dict]], dat
     return courts, fetched
 
 
-def search(venue: str, progress=None, max_age_s: float = CACHE_MAX_AGE_S) -> dict:
+def search(acct: session.Account, venue: str, progress=None, max_age_s: float = CACHE_MAX_AGE_S) -> dict:
     """Every hour from today to BOOK_WINDOW[1] days ahead: how many courts are open online / walk-in only /
-    not rented at all. `hours` are the rows of this venue's timetable on the site."""
+    not rented at all. `hours` are the rows of this venue's timetable on the site. A walk that is needed
+    goes through `acct`'s login."""
     cached = cache_get(venue, max_age_s) if max_age_s > 0 else None
     if not cached:
-        with session.SITE_LOCK:
+        with acct.site_lock:
             # Another walk (the robot, or a search) may have fetched this venue while we waited for the site.
             cached = cache_get(venue, max_age_s) if max_age_s > 0 else None
             if not cached:
-                courts, fetched = scan_venue(venue, progress), datetime.now()
+                courts, fetched = scan_venue(acct, venue, progress), datetime.now()
                 cache_put(venue, courts)
                 _partial.pop(venue, None)  # only after the cache has it, so the UI never sees neither
     if cached:
@@ -191,10 +192,10 @@ def partial_courts(venue: str) -> list[tuple[str, dict]]:
     return list(p["courts"]) if p else []
 
 
-def scan_venue(venue: str, progress=None) -> list[tuple[str, dict]]:
+def scan_venue(acct: session.Account, venue: str, progress=None) -> list[tuple[str, dict]]:
     """Return [(court_name, {(iso_date, hour): status}), ...] for every court of one venue,
-    covering today through BOOK_WINDOW[1] days ahead. Callers must hold session.SITE_LOCK."""
-    courts, sk, page = open_venue(venue)
+    covering today through BOOK_WINDOW[1] days ahead. Callers must hold acct.site_lock."""
+    courts, sk, page = open_venue(acct, venue)
     start = date.today()
     result = [(courts[0][1], parse_schedule(page))]
     _partial[venue] = p = {"started": datetime.now(), "courts": result, "total": len(courts), "running": True}
@@ -202,8 +203,8 @@ def scan_venue(venue: str, progress=None) -> list[tuple[str, dict]]:
         if progress:
             progress(1, len(courts))
         for i, (court_id, court_name) in enumerate(courts[1:], start=2):
-            session.pause(1.2)
-            html = fetch_schedule(court_id, sk, start, start + timedelta(days=BOOK_WINDOW[1]))
+            acct.pause(1.2)
+            html = fetch_schedule(acct, court_id, sk, start, start + timedelta(days=BOOK_WINDOW[1]))
             result.append((court_name, parse_schedule(html)))
             if progress:
                 progress(i, len(courts))

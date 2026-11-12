@@ -3,18 +3,16 @@
 Online bookings of ball courts show up there (租借紀錄 stays empty for them). Each order has its rental
 times, venue, amount, 訂單狀態 (已核准, 會員取消, ...) and 繳費狀態 (待繳費 with a deadline, 已繳費 with
 the time paid). The list may be paged on the site; only its first page is read. Reading the list does
-not change the venue chosen in the server-side session, so it does not need session.SITE_LOCK.
+not change the venue chosen in the server-side session, so it does not need the account's site_lock.
 """
 import html as htmllib
 import json
 import re
 from datetime import datetime
-from pathlib import Path
-
+import config
 import session
 
 ORDERS_PATH = "/member/rental/"
-ORDERS_FILE = Path(__file__).with_name("orders.json")  # the last list read, shown at once after a restart
 
 _ROW_RE = re.compile(r"<tbody>\s*<tr class=\"I\">(.*?)</tr>\s*</tbody>", re.S)
 _CELL_RE = re.compile(r'<div class="(?:MC )?(\w+)"[^>]*>(.*?)</div>', re.S)
@@ -63,26 +61,31 @@ def classify(order: dict) -> str:
     return "unpaid"
 
 
-def fetch_orders() -> dict:
-    """Read the order list from the site. Raises session.NotLoggedIn when the login expired."""
-    page = session.fetch(ORDERS_PATH)
+def _file(acct: session.Account):
+    return acct.dir / "orders.json"  # the last list read, shown at once after a restart
+
+
+def fetch_orders(acct: session.Account) -> dict:
+    """Read acct's order list from the site. Raises session.NotLoggedIn when the login expired."""
+    page = acct.fetch(ORDERS_PATH)
     if "Logout.php" not in page:  # the member pages show a login form instead of the tiny logged-out page
-        session.clear()
+        acct.clear()
         raise session.NotLoggedIn("登入已過期")
-    session.SNAPSHOT_DIR.mkdir(exist_ok=True)
-    (session.SNAPSHOT_DIR / "_orders.html").write_text(page, encoding="utf-8")
+    session.SNAPSHOT_DIR.mkdir(parents=True, exist_ok=True)
+    (session.SNAPSHOT_DIR / f"_orders_{acct.name}.html").write_text(page, encoding="utf-8")
     orders = parse_orders(page)
     if not orders and "無符合資料紀錄" not in page and "OrderNo" not in page:
-        raise ValueError("訂單頁面格式可能改了（頁面已存到 snapshots/_orders.html）")
+        raise ValueError("訂單頁面格式可能改了（頁面已存到 data/snapshots/）")
     for o in orders:
         o["kind"] = classify(o)
     data = {"fetched": datetime.now().isoformat(timespec="seconds"), "orders": orders}
-    ORDERS_FILE.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+    config.write_json(_file(acct), data)
     return data
 
 
-def load_saved() -> dict | None:
-    return json.loads(ORDERS_FILE.read_text(encoding="utf-8")) if ORDERS_FILE.exists() else None
+def load_saved(acct: session.Account) -> dict | None:
+    f = _file(acct)
+    return json.loads(f.read_text(encoding="utf-8")) if f.exists() else None
 
 
 def pay_path(order_id: str) -> str:

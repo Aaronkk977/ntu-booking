@@ -1,28 +1,38 @@
-"""Local control panel for NTU venue booking.
+"""Web app for NTU venue booking, for a few people, opened from their phones.
 
-Serves static/index.html and a small JSON API on 127.0.0.1 only.
-Run:  python server.py   then open http://127.0.0.1:8765
+Listens on 127.0.0.1 only; the outside world reaches it through a Cloudflare Tunnel (see deploy/).
+People log in with their own 計中 account (only accounts on the allow list in data/config.json); the
+password is checked by really logging in to the school's site through 計中 SSO, then kept encrypted so
+the server can log in again on its own when the school's login expires.
+
+Run:  python server.py        (PORT, PUBLIC_URL and NTU_BOOKING_DATA can be set in the environment)
 """
+import hashlib
 import json
 import os
+import secrets
+import shutil
+import sys
 import threading
 import time
-import webbrowser
 from datetime import date, datetime, timedelta
+from http.cookies import SimpleCookie
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
-from pathlib import Path
+from urllib.parse import urlparse
 
 import booker
+import config
 import credentials
 import history
+import notify
 import orders
 import robot
 import scanner
 import session
 
 HOST, PORT = "127.0.0.1", int(os.environ.get("PORT", 8765))
-ROOT = Path(__file__).parent
-STATIC = ROOT / "static"
+STATIC = config.ROOT / "static"
+LOCAL_ORIGINS = {f"http://127.0.0.1:{PORT}", f"http://localhost:{PORT}"}
 
 # Venue IDs come from the "常租場地" links on rent.pe.ntu.edu.tw (/order/?Add=A:<id>).
 VENUES = [
@@ -36,204 +46,225 @@ VENUE_IDS = {v["id"] for v in VENUES}
 VENUE_IDS_ORDERED = [v["id"] for v in VENUES]
 VENUE_NAMES = {v["id"]: f"{v['name']}（{v['sport']}）" for v in VENUES}
 
+config.init_dirs()
+if hasattr(sys.stdout, "reconfigure"):
+    sys.stdout.reconfigure(encoding="utf-8", errors="replace")  # data/logs/server.log is read as UTF-8
+
+# ---------- logs ----------
+# Entries with an account are shown to that person; entries without one (robot rounds, server events)
+# only to the admins.
+
 _lock = threading.Lock()
 _logs: list[dict] = []
 
 
-def log(level: str, msg: str) -> None:
+def log(level: str, msg: str, account: str | None = None) -> None:
     with _lock:
-        _logs.append({"time": datetime.now().strftime("%Y-%m-%d %H:%M:%S"), "level": level, "msg": msg})
-        del _logs[:-500]
-
-
-_login = {"in_progress": False}
+        _logs.append({"time": datetime.now().strftime("%Y-%m-%d %H:%M:%S"), "level": level, "msg": msg,
+                      "account": account})
+        del _logs[:-1000]
+    try:  # the console may not take every character (cp950 on a Windows console); logging must never throw
+        print(f"[{level}] {account or '-'}: {msg}", flush=True)
+    except (UnicodeError, OSError):
+        pass
 
 
 def _err(e: Exception) -> str:
     return f"{e.__class__.__name__}: {str(e).splitlines()[0] if str(e) else ''}"
 
 
-def _run_login(username: str, password: str) -> None:
-    try:
-        sso = session.sso_username(username)
-        if sso:
-            try:
-                session.sso_login(sso, password)
-                log("info", "已用計中帳號登入，已儲存登入狀態")
-                ROBOT.logged_in()
-                _start_orders()
-                return
-            except Exception as e:  # wrong password, an extra verification step, no browser installed, ...
-                log("warn", f"計中帳號自動登入沒有成功（{_err(e)}），改開瀏覽器視窗讓你手動登入")
-        session.interactive_login(username, password)
-        log("info", "登入成功，已儲存登入狀態")
-        ROBOT.logged_in()
-        _start_orders()
-    except Exception as e:  # Playwright timeout, closed window, no browser installed, ...
-        log("error", f"登入未完成：{_err(e)}")
-    finally:
-        _login["in_progress"] = False
+def slot_label(venue: str, day: str, hour: int) -> str:
+    return f"{VENUE_NAMES.get(venue, venue)} {day} {hour:02d}:00–{hour + 1:02d}:00"
 
 
-# Unattended re-login through 計中 SSO when a request finds the login expired. After a failure it waits
-# RELOGIN_COOLDOWN_S before trying again, so a wrong password is not retried until the account locks.
-RELOGIN_COOLDOWN_S = 10 * 60
-_relogin_lock = threading.Lock()
-_relogin_failed_at = [0.0]
+def _discord_id(acct: session.Account) -> str:
+    return robot.load_config(acct).get("discord_id", "")
 
 
-def _auto_relogin() -> bool:
-    with _relogin_lock:
-        if session.has_session():  # another thread logged in again while this one waited
+# ---------- logins to this web app ----------
+
+WEB_SESSIONS_FILE = config.DATA / "web_sessions.json"
+WEB_SESSION_DAYS = 30
+COOKIE = "nb_session"
+_web_lock = threading.Lock()
+
+
+def _hash(token: str) -> str:
+    return hashlib.sha256(token.encode()).hexdigest()
+
+
+def _web_sessions() -> dict:
+    return json.loads(WEB_SESSIONS_FILE.read_text(encoding="utf-8")) if WEB_SESSIONS_FILE.exists() else {}
+
+
+def new_web_session(account: str) -> str:
+    token = secrets.token_urlsafe(32)
+    with _web_lock:
+        data = _web_sessions()
+        cutoff = (datetime.now() - timedelta(days=WEB_SESSION_DAYS)).isoformat()
+        data = {k: v for k, v in data.items() if v["created"] > cutoff}
+        data[_hash(token)] = {"account": account, "created": datetime.now().isoformat(timespec="seconds")}
+        config.write_json(WEB_SESSIONS_FILE, data)
+    return token
+
+
+def web_session_account(token: str | None) -> str | None:
+    if not token:
+        return None
+    with _web_lock:
+        entry = _web_sessions().get(_hash(token))
+    if not entry or datetime.fromisoformat(entry["created"]) < datetime.now() - timedelta(days=WEB_SESSION_DAYS):
+        return None
+    return entry["account"] if config.is_allowed(entry["account"]) else None
+
+
+def end_web_sessions(token: str | None = None, account: str | None = None) -> None:
+    """Drop one login (token), or every login of an account."""
+    with _web_lock:
+        data = _web_sessions()
+        data = {k: v for k, v in data.items()
+                if not ((token and k == _hash(token)) or (account and v["account"] == account))}
+        config.write_json(WEB_SESSIONS_FILE, data)
+
+
+# Failed logins are limited per account and per IP, so nobody can use this page to try passwords on a
+# 計中 account until it locks.
+# Per IP the limit is higher: friends on the same campus Wi-Fi share one address.
+LOGIN_FAILS_MAX = {"a": 5, "i": 20}
+LOGIN_FAILS_WINDOW_S = 15 * 60
+_fails: dict[str, list[float]] = {}
+
+
+def _too_many_fails(*keys: str) -> bool:
+    now = time.monotonic()
+    for k in keys:
+        _fails[k] = [t for t in _fails.get(k, []) if now - t < LOGIN_FAILS_WINDOW_S]
+        if len(_fails[k]) >= LOGIN_FAILS_MAX[k[0]]:
             return True
-        if _login["in_progress"] or time.monotonic() - _relogin_failed_at[0] < RELOGIN_COOLDOWN_S:
-            return False
-        saved = credentials.load_or_none()
-        sso = session.sso_username(saved[0]) if saved else None
-        if not sso:
-            return False
-        _login["in_progress"] = True
-        try:
-            session.sso_login(sso, saved[1])
-            log("info", "登入已過期，已用計中帳號自動重新登入")
-            return True
-        except Exception as e:
-            _relogin_failed_at[0] = time.monotonic()
-            log("error", f"自動重新登入失敗（{_err(e)}），{RELOGIN_COOLDOWN_S // 60} 分鐘內不再自動嘗試，請按「登入網站」")
-            return False
-        finally:
-            _login["in_progress"] = False
+    return False
 
 
-def _with_relogin(fn):
-    """fn(), retried once after an automatic re-login if it found the login expired."""
-    try:
-        return fn()
-    except session.NotLoggedIn:
-        if not _auto_relogin():
-            raise
-        return fn()
+def _add_fail(*keys: str) -> None:
+    for k in keys:
+        _fails.setdefault(k, []).append(time.monotonic())
 
 
-_history_job = {"running": False, "venue": None, "done": 0, "total": 0}
+# ---------- orders (per person) ----------
 
-
-def _run_history(venue: str, since) -> None:
-    def progress(i, n):
-        _history_job.update(done=i, total=n)
-
-    try:
-        _with_relogin(lambda: history.update(venue, since, progress))
-        log("info", f"歷史資料已更新：{venue} 自 {since.isoformat()}")
-    except session.NotLoggedIn as e:
-        log("error", f"歷史資料更新失敗：{e}，請按「登入網站」")
-    except session.Preempted:
-        log("warn", "歷史資料更新被預訂中斷，預訂完成後請再按一次「更新歷史資料」")
-    except Exception as e:
-        log("error", f"歷史資料更新失敗：{e.__class__.__name__}: {e}")
-    finally:
-        _history_job.update(running=False)
-
-
-_search_job = {"running": False, "venues": [], "venue": None, "step": 0, "done": 0, "total": 0}
-_search_results: dict[str, dict] = {}  # latest per-venue result, from a manual search or a robot round
-
-
-_book_job = {"running": False, "hit": None, "message": "", "error": None}
-BOOKING_BUSY = "預訂視窗開著時無法讀取網站，請先完成預訂並關閉視窗"
-
-# A due round waits while a booking window is open, and while the orders are read (they go first).
-ROBOT = robot.Robot(log, VENUE_NAMES, VENUE_IDS_ORDERED, on_result=_search_results.__setitem__,
-                    is_paused=lambda: _book_job["running"] or _orders["running"], relogin=_auto_relogin)
-
-
-def _run_book(venue: str, day: str, hour: int, quantity: int) -> None:
-    def status(msg):
-        _book_job.update(message=msg)
-        log("info", f"預訂：{msg}")
-
-    label = f"{VENUE_NAMES[venue]} {day} {hour:02d}:00–{hour + 1:02d}:00"
-    members = robot.load_config().get("members", robot.DEFAULT_MEMBERS)
-    try:
-        status(f"準備預訂 {label}，共 {quantity} 面")
-        done = _with_relogin(lambda: booker.open_booking(venue, day, hour, members, status, quantity=quantity))
-        status(f"預訂視窗已關閉（{len(done)}/{quantity} 面到過確認頁）")
-        if done:
-            _start_orders()
-    except booker.SlotGone as e:
-        _book_job.update(error=str(e))
-        log("warn", f"預訂失敗：{label} {e}")
-        hits = robot.load_hits()  # the robot's list may hold the same slot
-        gone = hits.get(f"{venue}|{day}|{hour}")
-        if gone:
-            gone.update(status="gone", gone_at=datetime.now().isoformat(timespec="seconds"))
-        robot.save_hits(hits)
-    except session.NotLoggedIn as e:
-        _book_job.update(error=f"{e}，請先按「登入網站」")
-        log("error", f"預訂失敗：{e}，請先按「登入網站」")
-    except booker.Stuck as e:
-        _book_job.update(error=str(e))
-        log("warn", f"預訂：{e}；細節存在 snapshots/_booking_failed.txt")
-    except Exception as e:  # closed window early, no browser installed, page changed, ...
-        _book_job.update(error=_err(e))
-        log("error", f"預訂中斷：{_book_job['error']}")
-    finally:
-        _book_job.update(running=False)
-
-
-def _start_book(venue: str, day: str, hour: int, quantity: int, hit_id: str | None = None) -> None:
-    _book_job.update(running=True, hit=hit_id, message="準備中…", error=None)
-    threading.Thread(target=_run_book, args=(venue, day, hour, quantity), daemon=True).start()
-
-
-# Orders are read from the site in the background: at startup, after a login, every ORDERS_INTERVAL_S, and
-# right away after a booking or order window closes. It is a single request that does not switch the venue,
-# so it never waits for a search or a robot walk.
 ORDERS_INTERVAL_S = 30 * 60
-_orders = {"data": orders.load_saved(), "running": False, "error": None, "page_open": False}
+_orders: dict[str, dict] = {}
 
 
-def _run_orders() -> None:
+def orders_state(acct: session.Account) -> dict:
+    if acct.name not in _orders:
+        _orders[acct.name] = {"data": orders.load_saved(acct), "running": False, "error": None}
+    return _orders[acct.name]
+
+
+def _run_orders(acct: session.Account) -> None:
+    st = orders_state(acct)
     try:
-        data = _with_relogin(orders.fetch_orders)
-        _orders.update(data=data, error=None)
-        n_unpaid = sum(o["kind"] == "unpaid" for o in data["orders"])
-        log("info", f"已讀取訂單：{len(data['orders'])} 筆{f'，{n_unpaid} 筆待繳費' if n_unpaid else ''}")
+        data = acct.with_relogin(lambda: orders.fetch_orders(acct))
+        st.update(data=data, error=None)
+        _deadline_reminders(acct, data)
     except session.NotLoggedIn as e:
-        _orders.update(error=f"{e}，請按「登入網站」")
+        st.update(error=acct.login_error or str(e))
     except Exception as e:  # offline, page changed, ...
-        _orders.update(error=_err(e))
-        log("error", f"讀取訂單失敗：{_err(e)}")
+        st.update(error=_err(e))
+        log("error", f"讀取訂單失敗：{_err(e)}", acct.name)
     finally:
-        _orders.update(running=False)
-        ROBOT.wake()
+        st.update(running=False)
 
 
-def _start_orders() -> bool:
-    if _orders["running"]:
+def start_orders(acct: session.Account) -> bool:
+    st = orders_state(acct)
+    if st["running"]:
         return False
-    _orders.update(running=True)
-    threading.Thread(target=_run_orders, daemon=True).start()
+    st.update(running=True)
+    threading.Thread(target=_run_orders, args=(acct,), daemon=True).start()
     return True
+
+
+def _deadline_reminders(acct: session.Account, data: dict) -> None:
+    """DM once per order when its payment deadline is a day or less away."""
+    cfg = robot.load_config(acct)
+    told = set(cfg.get("deadline_told", []))
+    soon = date.today() + timedelta(days=1)
+    new = [o for o in data["orders"] if o["kind"] == "unpaid" and o["deadline"] and o["id"] not in told
+           and date.fromisoformat(o["deadline"][:10]) <= soon and any(s["date"] >= date.today().isoformat() for s in o["slots"])]
+    for o in new:
+        when = "、".join(f"{s['date']} {s['start']}" for s in o["slots"])
+        notify.send(_discord_id(acct), f"⏰ 繳費期限快到了：{o['venue']} {when}，截止 {o['deadline']}，金額 {o['amount']}",
+                    ("打開訂單", notify.url("#orders")))
+    if new:
+        cfg["deadline_told"] = sorted(told | {o["id"] for o in new})[-50:]
+        robot.save_config(acct, cfg)
 
 
 def _orders_loop() -> None:
     while True:
-        data = _orders["data"]
-        age = (datetime.now() - datetime.fromisoformat(data["fetched"])).total_seconds() if data else None
-        if session.has_session() and not _orders["page_open"] and (age is None or age >= ORDERS_INTERVAL_S):
-            _start_orders()
+        for name in config.users():
+            acct = session.account(name)
+            data = orders_state(acct)["data"]
+            age = (datetime.now() - datetime.fromisoformat(data["fetched"])).total_seconds() if data else None
+            if acct.has_session() and (age is None or age >= ORDERS_INTERVAL_S):
+                start_orders(acct)
         time.sleep(60)
 
 
-def _run_order_page(path: str) -> None:
-    try:
-        _with_relogin(lambda: booker.open_page(path))
-    except Exception as e:  # closed early, no browser, login expired, ...
-        log("error", f"開啟訂單頁面失敗：{_err(e)}")
-    finally:
-        _orders.update(page_open=False)
-        _start_orders()  # the user may have paid or cancelled there
+# ---------- booking ----------
+
+def _on_prep_change(prep: booker.Prep) -> None:
+    acct = prep.acct
+    log({"failed": "error", "expired": "warn"}.get(prep.status, "info"), f"預訂 {prep.label}：{prep.message}", acct.name)
+    did = _discord_id(acct)
+    if prep.status == "ready":
+        notify.send(did, f"🏸 {prep.label}\n{prep.message}", ("打開確認頁", notify.url(f"#prep/{prep.id}")))
+    elif prep.status == "done":
+        notify.send(did, f"✅ {prep.label}\n{prep.message}", ("打開訂單", notify.url("#orders")))
+        start_orders(acct)
+    elif prep.status in ("failed", "expired"):
+        notify.send(did, f"⚠️ {prep.label}\n{prep.message}")
+        if prep.status == "failed" and "沒有可訂" in prep.message:
+            robot.mark_gone(acct, prep.venue, prep.day, prep.hour)
+        if prep.booked:
+            start_orders(acct)
+
+
+def start_prep(acct: session.Account, venue: str, day: str, hour: int, quantity: int) -> booker.Prep:
+    members = robot.load_config(acct).get("members", robot.DEFAULT_MEMBERS)
+    return booker.prepare(acct, venue, slot_label(venue, day, hour), day, hour, quantity, members, _on_prep_change)
+
+
+def _on_new_hits(acct: session.Account, found: list[tuple[dict, list[dict]]]) -> None:
+    """The robot found slots for this person: prepare the first auto-prepare one, tell them about the rest."""
+    did = _discord_id(acct)
+    for hit, filters in found:
+        label = slot_label(hit["venue"], hit["date"], hit["hour"])
+        names = "、".join(f["name"] for f in filters)
+        log("warn", f"機器人找到：［{names}］{label}（{hit['count']} 面）", acct.name)
+        auto = any(f.get("auto_prepare", True) for f in filters)
+        if auto and not booker.busy(acct) and credentials.load(acct.name):
+            quantity = robot.clamp_want(hit.get("want"), hit.get("count", 1))
+            start_prep(acct, hit["venue"], hit["date"], hit["hour"], quantity)
+            notify.send(did, f"🔎 找到空位：［{names}］{label}（{hit['count']} 面），正在幫你填到學校確認頁…")
+        else:
+            notify.send(did, f"🔎 找到空位：［{names}］{label}（{hit['count']} 面）", ("打開清單", notify.url(f"#hit/{hit['id']}")))
+
+
+def _on_robot_error(msg: str) -> None:
+    for name in config.load()["admins"]:
+        notify.send(_discord_id(session.account(name)), f"🤖 機器人掃描失敗：{msg}")
+
+
+# ---------- search & history (shared results) ----------
+
+_search_job = {"running": False, "venues": [], "venue": None, "step": 0, "done": 0, "total": 0, "by": None}
+_search_results: dict[str, dict] = {}  # latest per-venue result, from a manual search or a robot round
+_history_job = {"running": False, "venue": None, "done": 0, "total": 0}
+
+ROBOT = robot.Robot(log, VENUE_NAMES, VENUE_IDS_ORDERED, on_result=_search_results.__setitem__,
+                    on_new_hits=_on_new_hits, on_error=_on_robot_error)
 
 
 def _sync_search_from_cache() -> None:
@@ -241,355 +272,486 @@ def _sync_search_from_cache() -> None:
     for venue in VENUE_IDS_ORDERED:
         cached = scanner.cache_get(venue, 24 * 3600)
         if cached and (venue not in _search_results or cached[1].isoformat(timespec="seconds") > _search_results[venue]["generated"]):
-            _search_results[venue] = scanner.search(venue, max_age_s=24 * 3600)
+            _search_results[venue] = scanner.summarize(venue, cached[0], cached[1], from_cache=True)
 
 
 def _shown_results() -> dict[str, dict]:
-    """Finished results, plus the courts read so far for venues that have none yet."""
     return {**scanner.partial_results(), **_search_results}
 
 
-def _run_search(venues: list[str], force: bool) -> None:
+def _run_search(acct: session.Account, venues: list[str], force: bool) -> None:
     def progress(i, n):
         _search_job.update(done=i, total=n)
 
     try:
-        while _orders["running"]:  # the orders go first; they take about a second
-            time.sleep(0.2)
         for step, venue in enumerate(venues, start=1):
             _search_job.update(venue=venue, step=step, done=0, total=0)
-            result = _with_relogin(lambda: scanner.search(venue, progress, max_age_s=0 if force else scanner.CACHE_MAX_AGE_S))
+            max_age = 0 if force else scanner.CACHE_MAX_AGE_S
+            result = acct.with_relogin(lambda: scanner.search(acct, venue, progress, max_age_s=max_age))
             _search_results[venue] = result
-            n_open = sum(bool(c["open"]) for c in result["cells"].values())
-            n_onsite = sum(bool(c["onsite"]) for c in result["cells"].values())
-            src = f"（使用 {result['generated'][11:16]} 的快取）" if result["from_cache"] else ""
-            log("info", f"可租時段搜尋完成：{VENUE_NAMES[venue]} 線上可租 {n_open} 個時段、僅現場 {n_onsite} 個時段{src}")
     except session.NotLoggedIn as e:
-        log("error", f"搜尋失敗：{e}，請按「登入網站」")
+        log("error", f"搜尋失敗：{acct.login_error or e}", acct.name)
     except session.Preempted:
-        log("warn", "搜尋被預訂中斷，預訂完成後請再搜尋一次")
+        log("warn", "搜尋被預訂中斷，預訂完成後請再搜尋一次", acct.name)
     except Exception as e:
-        log("error", f"搜尋失敗：{e.__class__.__name__}: {e}")
+        log("error", f"搜尋失敗：{_err(e)}", acct.name)
     finally:
         _search_job.update(running=False)
 
 
+def _run_history(acct: session.Account, venue: str, since) -> None:
+    def progress(i, n):
+        _history_job.update(done=i, total=n)
+
+    try:
+        acct.with_relogin(lambda: history.update(acct, venue, since, progress))
+        log("info", f"歷史資料已更新：{venue} 自 {since.isoformat()}", acct.name)
+    except session.Preempted:
+        log("warn", "歷史資料更新被預訂中斷，請再按一次「更新歷史資料」", acct.name)
+    except Exception as e:
+        log("error", f"歷史資料更新失敗：{acct.login_error or _err(e)}", acct.name)
+    finally:
+        _history_job.update(running=False)
+
+
+# ---------- HTTP ----------
+
 class Handler(BaseHTTPRequestHandler):
+    protocol_version = "HTTP/1.1"
+
     def log_message(self, fmt, *args):  # keep the console quiet
         pass
 
-    # Only accept requests addressed to this local server, so other websites
-    # open in the same browser cannot drive the API.
-    def _trusted(self) -> bool:
-        allowed = {f"127.0.0.1:{PORT}", f"localhost:{PORT}"}
-        if self.headers.get("Host") not in allowed:
-            return False
-        origin = self.headers.get("Origin")
-        return origin is None or origin.removeprefix("http://") in allowed
+    # --- helpers ---
 
-    def _json(self, data, status=200):
-        body = json.dumps(data, ensure_ascii=False).encode("utf-8")
+    def _public(self) -> tuple[str, str] | None:
+        """(origin, host) of the configured public URL, e.g. ("https://x.example.com", "x.example.com")."""
+        pub = config.load()["public_url"]
+        if not pub:
+            return None
+        u = urlparse(pub)
+        return f"{u.scheme}://{u.netloc}", u.netloc
+
+    def _via_public(self) -> bool:
+        pub = self._public()
+        return bool(pub) and self.headers.get("Host") == pub[1]
+
+    def _trusted(self, write: bool) -> bool:
+        """Only requests addressed to this app (its public host, or 127.0.0.1 for testing). Writes must also
+        come from its own pages (Origin), so another site can't drive the API with someone's cookie."""
+        local_hosts = {o.removeprefix("http://") for o in LOCAL_ORIGINS}
+        pub = self._public()
+        host = self.headers.get("Host")
+        if host not in local_hosts and not (pub and host == pub[1]):
+            return False
+        if not write:
+            return True
+        origin = self.headers.get("Origin")
+        return origin in LOCAL_ORIGINS or bool(pub and origin == pub[0])
+
+    def _client_ip(self) -> str:
+        return self.headers.get("CF-Connecting-IP") or self.client_address[0]
+
+    def _token(self) -> str | None:
+        c = SimpleCookie(self.headers.get("Cookie") or "")
+        return c[COOKIE].value if COOKIE in c else None
+
+    def _account(self) -> session.Account | None:
+        name = web_session_account(self._token())
+        return session.account(name) if name else None
+
+    def _send(self, status: int, body: bytes, ctype: str, headers: dict | None = None):
         self.send_response(status)
-        self.send_header("Content-Type", "application/json; charset=utf-8")
+        self.send_header("Content-Type", ctype)
         self.send_header("Content-Length", str(len(body)))
         self.send_header("Cache-Control", "no-store")
+        self.send_header("X-Content-Type-Options", "nosniff")
+        self.send_header("X-Frame-Options", "DENY")
+        self.send_header("Referrer-Policy", "same-origin")
+        for k, v in (headers or {}).items():
+            self.send_header(k, v)
         self.end_headers()
         self.wfile.write(body)
 
+    def _json(self, data, status=200, headers=None):
+        self._send(status, json.dumps(data, ensure_ascii=False).encode("utf-8"), "application/json; charset=utf-8", headers)
+
+    def _error(self, status: int, msg: str = ""):
+        self._json({"error": msg or {401: "請先登入", 403: "不允許", 404: "找不到"}.get(status, "錯誤")}, status)
+
     def _body(self) -> dict:
-        length = int(self.headers.get("Content-Length") or 0)
+        length = min(int(self.headers.get("Content-Length") or 0), 64 * 1024)
         try:
-            return json.loads(self.rfile.read(length) or b"{}")
-        except json.JSONDecodeError:
+            data = json.loads(self.rfile.read(length) or b"{}")
+            return data if isinstance(data, dict) else {}
+        except (json.JSONDecodeError, UnicodeDecodeError):
             return {}
+
+    def _cookie_header(self, token: str, max_age: int) -> dict:
+        secure = "; Secure" if self._via_public() and config.load()["public_url"].startswith("https://") else ""
+        return {"Set-Cookie": f"{COOKIE}={token}; Path=/; Max-Age={max_age}; HttpOnly; SameSite=Lax{secure}"}
 
     def _static(self, path: str):
         target = (STATIC / (path.lstrip("/") or "index.html")).resolve()
         if STATIC.resolve() not in target.parents or not target.is_file():
-            self.send_error(404)
-            return
-        ctype = {".html": "text/html", ".css": "text/css", ".js": "text/javascript", ".svg": "image/svg+xml"}.get(
-            target.suffix, "application/octet-stream"
-        )
-        data = target.read_bytes()
-        self.send_response(200)
-        self.send_header("Content-Type", f"{ctype}; charset=utf-8")
-        self.send_header("Content-Length", str(len(data)))
-        self.end_headers()
-        self.wfile.write(data)
+            return self._error(404)
+        ctype = {".html": "text/html", ".css": "text/css", ".js": "text/javascript", ".svg": "image/svg+xml",
+                 ".webmanifest": "application/manifest+json", ".png": "image/png"}.get(target.suffix, "application/octet-stream")
+        self._send(200, target.read_bytes(), f"{ctype}; charset=utf-8")
+
+    # --- dispatch ---
 
     def do_GET(self):
-        if not self._trusted():
-            return self.send_error(403)
+        self._dispatch("GET")
+
+    def do_POST(self):
+        self._dispatch("POST")
+
+    def do_DELETE(self):
+        self._dispatch("DELETE")
+
+    def _dispatch(self, method: str):
+        if not self._trusted(write=method != "GET"):
+            self.close_connection = True
+            return self._error(403)
         path = self.path.split("?")[0]
-        if path == "/api/credentials":
+        try:
+            body = self._body() if method != "GET" else {}  # read it first: the connection is kept alive
+            if not path.startswith("/api/"):
+                return self._static(path) if method == "GET" else self._error(404)
+            if (method, path) == ("POST", "/api/login"):
+                return self._login(body)
+            acct = self._account()
+            if acct is None:
+                return self._error(401)
+            return getattr(self, f"_{method.lower()}")(acct, path, body)
+        except BrokenPipeError:
+            pass
+        except Exception as e:  # never show a traceback page
+            log("error", f"{method} {path}：{_err(e)}")
             try:
-                saved = credentials.load()
-            except OSError:
-                return self._json({"username": "", "has_password": False, "error": "已存資料無法解密"})
-            return self._json({"username": saved[0] if saved else "", "has_password": bool(saved)})
+                self._error(500, "伺服器錯誤")
+            except Exception:
+                pass
+
+    # --- login ---
+
+    def _login(self, body: dict):
+        name = config.normalize_account(str(body.get("account", "")))
+        password = str(body.get("password") or "")
+        if not name or not password:
+            return self._error(400, "請輸入計中帳號和密碼")
+        ip = self._client_ip()
+        if _too_many_fails(f"a:{name}", f"i:{ip}"):
+            return self._error(429, "失敗次數太多，請 15 分鐘後再試")
+        if not config.is_allowed(name):
+            _add_fail(f"i:{ip}")
+            log("warn", f"不在允許名單的帳號嘗試登入：{name}（{ip}）")
+            return self._error(403, "這個帳號不在允許名單裡，請找管理者加入")
+        acct = session.account(name)
+        acct.dir.mkdir(parents=True, exist_ok=True)
+        try:
+            acct.sso_login(password)
+        except Exception as e:
+            _add_fail(f"a:{name}", f"i:{ip}")
+            log("warn", f"登入失敗：{_err(e)}", name)
+            return self._error(401, "計中帳號登入沒有成功，請確認帳號密碼" if isinstance(e, session.NotLoggedIn)
+                               else f"無法連到學校網站（{_err(e)}）")
+        credentials.save(name, password)
+        token = new_web_session(name)
+        log("info", "已登入", name)
+        start_orders(acct)
+        if name == config.scan_account():
+            ROBOT.logged_in()
+        return self._json({"ok": True, "account": name}, headers=self._cookie_header(token, WEB_SESSION_DAYS * 86400))
+
+    # --- GET ---
+
+    def _get(self, acct: session.Account, path: str, body: dict):
+        admin = config.is_admin(acct.name)
+        if path == "/api/me":
+            cfg = robot.load_config(acct)
+            gcfg = config.load()
+            return self._json({
+                "account": acct.name, "admin": admin, "discord_id": cfg.get("discord_id", ""),
+                "discord_ready": bool(gcfg["discord_token"]), "school_login": acct.has_session(),
+                "login_error": acct.login_error, "has_password": credentials.load(acct.name) is not None,
+                "members": cfg.get("members", robot.DEFAULT_MEMBERS), "member_types": booker.MEMBER_TYPES,
+                "public_url": gcfg["public_url"],
+                **({"allowed": gcfg["allowed"], "admins": gcfg["admins"], "scan_account": config.scan_account()} if admin else {}),
+            })
         if path == "/api/venues":
             return self._json(VENUES)
         if path == "/api/logs":
             with _lock:
-                return self._json(list(_logs))
+                return self._json([e for e in _logs if e["account"] == acct.name or (admin and e["account"] is None)])
         if path == "/api/robot":
-            cfg = robot.load_config()
-            all_hits = sorted(robot.load_hits().values(), key=lambda h: (h["date"], h["hour"], h["venue"]))
-            hits = [h for h in all_hits if h["status"] != "dismissed"]
+            cfg = robot.load_config(acct)
+            all_hits = sorted(robot.load_hits(acct).values(), key=lambda h: (h["date"], h["hour"], h["venue"]))
             today = date.today()
             return self._json({
-                "state": ROBOT.snapshot(), "interval_min": cfg["interval_min"], "filters": cfg["filters"], "hits": hits,
+                "state": ROBOT.snapshot(), "interval_min": config.load()["interval_min"], "filters": cfg["filters"],
+                "hits": [h for h in all_hits if h["status"] != "dismissed"],
                 "dismissed": [h for h in all_hits if h["status"] == "dismissed"],
-                "hours": scanner.HOURS, "min_interval": robot.MIN_INTERVAL_MIN,
+                "hours": scanner.HOURS, "min_interval": robot.MIN_INTERVAL_MIN, "can_set_interval": admin,
                 "online_dates": [(today + timedelta(days=n)).isoformat()
                                  for n in range(scanner.BOOK_WINDOW[0], scanner.BOOK_WINDOW[1] + 1)],
-                "has_session": session.has_session(), "login_in_progress": _login["in_progress"],
                 "members": cfg.get("members", robot.DEFAULT_MEMBERS), "member_types": booker.MEMBER_TYPES,
-                "book_job": _book_job,
             })
+        if path == "/api/preps":
+            return self._json([p.public() for p in booker.for_account(acct)])
+        if path.startswith("/api/preps/") and path.endswith("/shot"):
+            prep = booker.get(path.split("/")[3])
+            if not prep or prep.acct is not acct or not prep.screenshot:
+                return self._error(404)
+            return self._send(200, prep.screenshot, "image/jpeg")
+        if path.startswith("/api/preps/"):
+            prep = booker.get(path.split("/")[3])
+            if not prep or prep.acct is not acct:
+                return self._error(404, "找不到這筆預訂（可能已過期或伺服器重新啟動過）")
+            return self._json(prep.public())
         if path == "/api/history":
-            return self._json({"stats": history.load_all(), "job": _history_job})
+            return self._json({"stats": history.load_all(), "job": _history_job, "can_update": admin})
         if path == "/api/orders":
-            return self._json(_orders)
+            st = orders_state(acct)
+            data = st["data"]
+            if data:
+                data = {**data, "orders": [{**o, "pay_url": session.BASE + orders.pay_path(o["id"]),
+                                            "detail_url": session.BASE + orders.detail_path(o["id"])} for o in data["orders"]]}
+            return self._json({**st, "data": data})
         if path == "/api/search":
             if not _search_job["running"]:
                 _sync_search_from_cache()
-            return self._json({
-                "results": _shown_results(), "job": _search_job, "has_session": session.has_session(),
-                "cache_minutes": scanner.CACHE_MAX_AGE_S // 60,
-            })
-        return self._static(path)
+            return self._json({"results": _shown_results(), "job": _search_job,
+                               "cache_minutes": scanner.CACHE_MAX_AGE_S // 60})
+        return self._error(404)
 
-    def do_POST(self):
-        if not self._trusted():
-            return self.send_error(403)
-        path, body = self.path.split("?")[0], self._body()
-        if path == "/api/credentials":
-            username = str(body.get("username", "")).strip()
-            password = body.get("password") or ""
-            if not password:  # keep the stored password when only the username changes
-                saved = credentials.load_or_none()
-                password = saved[1] if saved else ""
-            if not username or not password:
-                return self._json({"error": "請輸入帳號和密碼"}, 400)
-            credentials.save(username, password)
-            log("info", f"已儲存帳號 {username}")
+    # --- POST ---
+
+    def _post(self, acct: session.Account, path: str, body: dict):
+        admin = config.is_admin(acct.name)
+        if path == "/api/logout":
+            end_web_sessions(token=self._token())
+            return self._json({"ok": True}, headers=self._cookie_header("", 0))
+        if path == "/api/me/discord":
+            did = str(body.get("discord_id") or "").strip()
+            if did and not (did.isdigit() and 15 <= len(did) <= 21):
+                return self._error(400, "Discord 使用者 ID 是一串 17–20 位數字")
+            cfg = robot.load_config(acct)
+            cfg["discord_id"] = did
+            robot.save_config(acct, cfg)
+            return self._json({"ok": True})
+        if path == "/api/me/discord/test":
+            try:
+                notify.send_now(_discord_id(acct), f"👋 {acct.name}，這是場地預約的測試訊息", ("打開網站", notify.url()))
+            except Exception as e:
+                return self._error(400, f"送不出去：{e}（bot 和你要在同一個 Discord 伺服器）")
+            return self._json({"ok": True})
+        if path == "/api/me/members":
+            try:
+                members = {t: max(0, min(10, int((body.get("members") or {}).get(t) or 0))) for t in booker.MEMBER_TYPES}
+            except (TypeError, ValueError, AttributeError):
+                return self._error(400, "人數格式錯誤")
+            if not sum(members.values()):
+                return self._error(400, "人數至少要 1 人")
+            cfg = robot.load_config(acct)
+            cfg["members"] = members
+            robot.save_config(acct, cfg)
             return self._json({"ok": True})
         if path == "/api/robot/settings":
-            cfg = robot.load_config()
+            if not admin:
+                return self._error(403, "只有管理者能改掃描間隔")
             try:
-                if "interval_min" in body:
-                    cfg["interval_min"] = max(robot.MIN_INTERVAL_MIN, min(60, int(body["interval_min"])))
-                if "members" in body:
-                    members = {t: max(0, min(10, int((body["members"] or {}).get(t) or 0))) for t in booker.MEMBER_TYPES}
-                    if not sum(members.values()):
-                        return self._json({"error": "人數至少要 1 人"}, 400)
-                    cfg["members"] = members
-            except (TypeError, ValueError, AttributeError):
-                return self._json({"error": "設定格式錯誤"}, 400)
-            robot.save_config(cfg)
-            return self._json({"ok": True})
-        if path.startswith("/api/robot/hits/") and path.endswith("/book"):
-            if _book_job["running"]:
-                return self._json({"error": "已經有一筆預訂視窗開著，請先完成或關閉它"}, 409)
-            hit_id = path.split("/")[4]
-            hit = robot.find_hit(robot.load_hits(), hit_id)
-            if hit is None or hit["status"] != "available":
-                return self._json({"error": "這筆已經不能訂了"}, 404)
-            if not session.has_session():
-                return self._json({"error": "請先按「登入網站」"}, 400)
-            quantity = robot.clamp_want(hit.get("want"), hit.get("count", 1))
-            _start_book(hit["venue"], hit["date"], hit["hour"], quantity, hit_id)
-            return self._json({"ok": True})
-        if path == "/api/book":  # straight from the search table
-            if _book_job["running"]:
-                return self._json({"error": "已經有一筆預訂視窗開著，請先完成或關閉它"}, 409)
-            venue = body.get("venue")
-            if venue not in VENUE_IDS:
-                return self._json({"error": "請選擇場地"}, 400)
-            try:
-                day, hour = date.fromisoformat(body["date"]), int(body["hour"])
-                quantity = int(body.get("quantity") or 1)
+                gcfg = config.load()
+                gcfg["interval_min"] = max(robot.MIN_INTERVAL_MIN, min(60, int(body["interval_min"])))
+                config.save(gcfg)
             except (KeyError, TypeError, ValueError):
-                return self._json({"error": "預訂資料格式錯誤"}, 400)
-            today = date.today()
-            if not (today + timedelta(days=scanner.BOOK_WINDOW[0]) <= day <= today + timedelta(days=scanner.BOOK_WINDOW[1])):
-                return self._json({"error": "只能線上預訂租借日前 3–7 天的時段"}, 400)
-            cell = (_shown_results().get(venue) or {}).get("cells", {}).get(f"{day.isoformat()}|{hour}")
-            if not cell or not cell["open"]:
-                return self._json({"error": "這個時段目前沒有線上空場，請重新搜尋"}, 404)
-            if not 1 <= quantity <= cell["open"]:
-                return self._json({"error": f"面數需介於 1 到 {cell['open']} 面（目前可借場數）"}, 400)
-            if not session.has_session():
-                return self._json({"error": "請先按「登入網站」"}, 400)
-            _start_book(venue, day.isoformat(), hour, quantity)
+                return self._error(400, "設定格式錯誤")
             return self._json({"ok": True})
-        if path.startswith("/api/robot/hits/") and path.endswith("/want"):
-            hit_id = path.split("/")[4]
-            hits = robot.load_hits()
-            hit = robot.find_hit(hits, hit_id)
-            if hit is None:
-                return self._json({"error": "找不到這筆"}, 404)
-            try:
-                want = int(body.get("want"))
-            except (TypeError, ValueError):
-                return self._json({"error": "數量格式錯誤"}, 400)
-            if not 1 <= want <= hit.get("count", 1):
-                return self._json({"error": f"數量需介於 1 到 {hit.get('count', 1)} 面（目前可借場數）"}, 400)
-            hit["want"] = want
-            robot.save_hits(hits)
-            return self._json({"ok": True, "want": want})
         if path == "/api/robot/filters" or path.startswith("/api/robot/filters/"):
             try:
                 cleaned = robot.clean_filter(body, VENUE_IDS_ORDERED)
             except (TypeError, ValueError):
-                return self._json({"error": "濾網格式錯誤"}, 400)
-            cfg = robot.load_config()
+                return self._error(400, "濾網格式錯誤")
+            cfg = robot.load_config(acct)
             if path == "/api/robot/filters":
+                if len(cfg["filters"]) >= 20:
+                    return self._error(400, "濾網最多 20 個")
                 f = {"id": robot._new_id(), **cleaned}
                 cfg["filters"].append(f)
-                log("info", f"新增濾網［{f['name']}］")
             else:
                 f = next((f for f in cfg["filters"] if f["id"] == path.rsplit("/", 1)[1]), None)
                 if f is None:
-                    return self._json({"error": "找不到濾網"}, 404)
-                if cleaned["enabled"] != f["enabled"]:
-                    log("info", f"濾網［{cleaned['name']}］已{'啟用' if cleaned['enabled'] else '停用'}")
+                    return self._error(404, "找不到濾網")
                 f.update(cleaned)
-            robot.save_config(cfg)
+            robot.save_config(acct, cfg)
             ROBOT.reschedule()
             return self._json(f)
         if path == "/api/robot/scan":
-            if _book_job["running"]:
-                return self._json({"error": BOOKING_BUSY}, 409)
+            if not admin:
+                return self._error(403, "只有管理者能手動掃描")
             ROBOT.scan_now()
-            log("info", "手動觸發機器人掃描")
             return self._json({"ok": True})
-        if path.startswith("/api/robot/hits/") and path.endswith("/restore"):
-            hits = robot.load_hits()
-            hit = robot.find_hit(hits, path.split("/")[4])
-            if hit is None or hit["status"] != "dismissed":
-                return self._json({"error": "這筆已經不在了（空位關閉後會自動清掉）"}, 404)
-            hit["status"] = "available"  # a dismissed hit is only kept while the slot is still open
-            robot.save_hits(hits)
-            return self._json({"ok": True})
-        if path.startswith("/api/robot/hits/") and path.endswith("/dismiss"):
-            hit_id = path.split("/")[4]
-            hits = robot.load_hits()
+        if path.startswith("/api/robot/hits/"):
+            parts = path.split("/")
+            if len(parts) != 6:
+                return self._error(404)
+            hit_id, action = parts[4], parts[5]
+            hits = robot.load_hits(acct)
             hit = robot.find_hit(hits, hit_id)
             if hit is None:
-                return self._json({"error": "找不到這筆"}, 404)
-            hit["status"] = "dismissed"
-            robot.save_hits(hits)
+                return self._error(404, "這筆已經不在了")
+            if action == "book":
+                if hit["status"] != "available":
+                    return self._error(404, "這筆已經不能訂了")
+                return self._book(acct, hit["venue"], hit["date"], hit["hour"],
+                                  robot.clamp_want(hit.get("want"), hit.get("count", 1)))
+            if action == "want":
+                try:
+                    want = int(body.get("want"))
+                except (TypeError, ValueError):
+                    return self._error(400, "數量格式錯誤")
+                if not 1 <= want <= hit.get("count", 1):
+                    return self._error(400, f"數量需介於 1 到 {hit.get('count', 1)} 面")
+                hit["want"] = want
+            elif action == "dismiss":
+                hit["status"] = "dismissed"
+            elif action == "restore":
+                if hit["status"] != "dismissed":
+                    return self._error(404, "這筆已經不在了")
+                hit["status"] = "available"
+            else:
+                return self._error(404)
+            robot.save_hits(acct, hits)
+            return self._json({"ok": True, "want": hit.get("want")})
+        if path == "/api/book":  # straight from the search table
+            venue = body.get("venue")
+            if venue not in VENUE_IDS:
+                return self._error(400, "請選擇場地")
+            try:
+                day, hour = date.fromisoformat(body["date"]), int(body["hour"])
+                quantity = int(body.get("quantity") or 1)
+            except (KeyError, TypeError, ValueError):
+                return self._error(400, "預訂資料格式錯誤")
+            today = date.today()
+            if not (today + timedelta(days=scanner.BOOK_WINDOW[0]) <= day <= today + timedelta(days=scanner.BOOK_WINDOW[1])):
+                return self._error(400, "只能線上預訂租借日前 3–7 天的時段")
+            cell = (_shown_results().get(venue) or {}).get("cells", {}).get(f"{day.isoformat()}|{hour}")
+            if not cell or not cell["open"]:
+                return self._error(404, "這個時段目前沒有線上空場，請重新搜尋")
+            if not 1 <= quantity <= cell["open"]:
+                return self._error(400, f"面數需介於 1 到 {cell['open']} 面")
+            return self._book(acct, venue, day.isoformat(), hour, quantity)
+        if path.startswith("/api/preps/") and path.rsplit("/", 1)[1] in ("confirm", "cancel"):
+            prep = booker.get(path.split("/")[3])
+            if not prep or prep.acct is not acct:
+                return self._error(404, "找不到這筆預訂")
+            decision = path.rsplit("/", 1)[1]
+            if not booker.decide(prep.id, decision):
+                return self._error(409, "這筆現在不能" + ("送出" if decision == "confirm" else "取消"))
+            log("info", f"預訂 {prep.label}：{'按下確認送出' if decision == 'confirm' else '取消'}", acct.name)
             return self._json({"ok": True})
         if path == "/api/search":
             if _search_job["running"]:
-                return self._json({"error": "搜尋進行中"}, 409)
-            if _book_job["running"]:
-                return self._json({"error": BOOKING_BUSY}, 409)
+                return self._error(409, "有人正在搜尋，結果大家共用，請稍等")
             venues = [v for v in VENUE_IDS_ORDERED if v in (body.get("venues") or [])]
             if not venues:
-                return self._json({"error": "請至少選一個場地"}, 400)
+                return self._error(400, "請至少選一個場地")
             force = bool(body.get("force"))
-            _search_job.update(running=True, venues=venues, venue=venues[0], step=0, done=0, total=0)
-            threading.Thread(target=_run_search, args=(venues, force), daemon=True).start()
-            log("info", f"開始{'重新抓取' if force else '搜尋'}可租時段：{'、'.join(VENUE_NAMES[v] for v in venues)}")
+            _search_job.update(running=True, venues=venues, venue=venues[0], step=0, done=0, total=0, by=acct.name)
+            threading.Thread(target=_run_search, args=(acct, venues, force), daemon=True).start()
             return self._json({"ok": True})
         if path == "/api/history":
+            if not admin:
+                return self._error(403, "只有管理者能更新歷史資料")
             if _history_job["running"]:
-                return self._json({"error": "歷史資料正在更新中"}, 409)
-            if _book_job["running"]:
-                return self._json({"error": BOOKING_BUSY}, 409)
+                return self._error(409, "歷史資料正在更新中")
             venue = body.get("venue")
             if venue not in VENUE_IDS:
-                return self._json({"error": "請選擇場地"}, 400)
+                return self._error(400, "請選擇場地")
             try:
                 since = datetime.strptime(body.get("since", ""), "%Y-%m-%d").date()
             except ValueError:
-                return self._json({"error": "起始日期格式錯誤"}, 400)
+                return self._error(400, "起始日期格式錯誤")
             if not (date.today() - timedelta(days=200) <= since < date.today()):
-                return self._json({"error": "起始日期需在今天之前、200 天以內"}, 400)
+                return self._error(400, "起始日期需在今天之前、200 天以內")
             _history_job.update(running=True, venue=venue, done=0, total=0)
-            threading.Thread(target=_run_history, args=(venue, since), daemon=True).start()
-            log("info", f"開始更新歷史資料：{venue} 自 {since.isoformat()}")
+            threading.Thread(target=_run_history, args=(acct, venue, since), daemon=True).start()
             return self._json({"ok": True})
         if path == "/api/orders/refresh":
-            if not session.has_session():
-                return self._json({"error": "請先按「登入網站」"}, 400)
-            _start_orders()
+            start_orders(acct)
             return self._json({"ok": True})
-        if path.startswith("/api/orders/") and path.rsplit("/", 1)[1] in ("pay", "detail"):
-            order_id, what = path.split("/")[3], path.rsplit("/", 1)[1]
-            known = {o["id"]: o for o in ((_orders["data"] or {}).get("orders") or [])}
-            if order_id not in known:
-                return self._json({"error": "找不到這筆訂單，請重新整理"}, 404)
-            if what == "pay" and not known[order_id]["can_pay"]:
-                return self._json({"error": "這筆訂單目前不能線上付款"}, 400)
-            if _orders["page_open"]:
-                return self._json({"error": "已經有一個訂單視窗開著，請先關閉它"}, 409)
-            if not session.has_session():
-                return self._json({"error": "請先按「登入網站」"}, 400)
-            _orders.update(page_open=True)
-            target = orders.pay_path(order_id) if what == "pay" else orders.detail_path(order_id)
-            threading.Thread(target=_run_order_page, args=(target,), daemon=True).start()
-            return self._json({"ok": True})
-        if path == "/api/session/login":
-            if _login["in_progress"]:
-                return self._json({"error": "登入視窗已開啟"}, 409)
-            saved = credentials.load_or_none()
-            if not saved:
-                return self._json({"error": "請先在設定儲存帳號密碼"}, 400)
-            _login["in_progress"] = True
-            threading.Thread(target=_run_login, args=saved, daemon=True).start()
-            log("info", "登入中：先用計中帳號自動登入，不行的話會開瀏覽器視窗讓你手動登入（5 分鐘內）")
-            return self._json({"ok": True})
-        return self.send_error(404)
+        if path == "/api/admin/allow" and admin:
+            name = config.normalize_account(str(body.get("account", "")))
+            if not name:
+                return self._error(400, "帳號格式錯誤")
+            gcfg = config.load()
+            if body.get("allow", True):
+                gcfg["allowed"] = sorted(set(gcfg["allowed"]) | {name})
+            else:
+                if name in gcfg["admins"]:
+                    return self._error(400, "不能移除管理者")
+                gcfg["allowed"] = [a for a in gcfg["allowed"] if a != name]
+                end_web_sessions(account=name)
+            config.save(gcfg)
+            log("info", f"允許名單{'加入' if body.get('allow', True) else '移除'} {name}", acct.name)
+            return self._json({"ok": True, "allowed": gcfg["allowed"]})
+        return self._error(404)
 
-    def do_DELETE(self):
-        if not self._trusted():
-            return self.send_error(403)
-        path = self.path.split("?")[0]
-        if path == "/api/credentials":
-            credentials.delete()
-            log("info", "已刪除儲存的帳號密碼")
-            return self._json({"ok": True})
+    def _book(self, acct: session.Account, venue: str, day: str, hour: int, quantity: int):
+        current = booker.busy(acct)
+        if current:
+            return self._json({"error": "你已經有一筆預訂在進行中", "prep": current.id}, 409)
+        if not credentials.load(acct.name):
+            return self._error(400, "伺服器上沒有你的密碼，請登出再登入")
+        prep = start_prep(acct, venue, day, hour, quantity)
+        return self._json({"ok": True, "prep": prep.id})
+
+    # --- DELETE ---
+
+    def _delete(self, acct: session.Account, path: str, body: dict):
         if path.startswith("/api/robot/filters/"):
-            cfg = robot.load_config()
+            cfg = robot.load_config(acct)
             keep = [f for f in cfg["filters"] if f["id"] != path.rsplit("/", 1)[1]]
             if len(keep) == len(cfg["filters"]):
-                return self._json({"error": "找不到濾網"}, 404)
+                return self._error(404, "找不到濾網")
             cfg["filters"] = keep
-            robot.save_config(cfg)
+            robot.save_config(acct, cfg)
             ROBOT.reschedule()
-            log("info", "已刪除濾網")
             return self._json({"ok": True})
         if path == "/api/robot/hits":
-            hits = {k: h for k, h in robot.load_hits().items() if h["status"] != "gone"}
-            robot.save_hits(hits)
+            robot.save_hits(acct, {k: h for k, h in robot.load_hits(acct).items() if h["status"] != "gone"})
             return self._json({"ok": True})
-        if path == "/api/session":
-            session.clear()
-            log("info", "已清除登入狀態")
-            return self._json({"ok": True})
-        return self.send_error(404)
+        if path == "/api/me":
+            # Forget everything about this person: stored password, school login, filters, hits, orders.
+            if booker.busy(acct):
+                return self._error(409, "有預訂進行中，請先取消")
+            end_web_sessions(account=acct.name)
+            shutil.rmtree(acct.dir, ignore_errors=True)
+            _orders.pop(acct.name, None)
+            log("info", f"{acct.name} 刪除了自己在伺服器上的所有資料")
+            ROBOT.reschedule()
+            return self._json({"ok": True}, headers=self._cookie_header("", 0))
+        return self._error(404)
 
 
-if __name__ == "__main__":
-    import sys
-
+def main() -> None:
+    cfg = config.load()
+    if not cfg["admins"]:
+        print("還沒有管理者：先執行  python manage.py set-admin <你的計中帳號>")
+    notify.start(log)
     server = ThreadingHTTPServer((HOST, PORT), Handler)
-    url = f"http://{HOST}:{PORT}"
-    log("info", "控制台已啟動")
-    threading.Thread(target=_orders_loop, daemon=True).start()  # first, before the robot's first walk
+    server.daemon_threads = True
+    log("info", f"伺服器已啟動：http://{HOST}:{PORT}  公開網址：{cfg['public_url'] or '（未設定）'}")
+    threading.Thread(target=_orders_loop, daemon=True, name="orders").start()
     ROBOT.reschedule()  # start scanning right away if any filter is enabled
-    if session.has_session():  # a login saved hours ago has probably expired; find out before showing "logged in"
-        threading.Thread(target=session.check, daemon=True).start()
-    print(f"The console is running at {url}")
-    print("It opens in your browser. Keep this window open while you use it; close it to stop.")
-    if "--no-browser" not in sys.argv:
-        webbrowser.open(url)
+    for name in config.users():  # a login saved hours ago has probably expired; find out now
+        threading.Thread(target=session.account(name).check, daemon=True).start()
     try:
         server.serve_forever()
     except KeyboardInterrupt:
         pass
+
+
+if __name__ == "__main__":
+    main()

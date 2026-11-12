@@ -4,19 +4,19 @@ Past cells are labelled by the site: "常租" (booked online), "已過期" (was 
 "未開放租借", holidays, classes, teams, events. Only aggregate counts are kept; labels that are
 people's names fall into "其他" and are not stored.
 
-Usage: python history.py [venue_id] [since YYYY-MM-DD]
-       python history.py A:2 2026-09-07
+Usage: python history.py <account> [venue_id] [since YYYY-MM-DD]
+       python history.py b12345678 A:2 2026-09-07
 """
 import json
 import sys
 from collections import defaultdict
 from datetime import date, datetime, timedelta
-from pathlib import Path
 
+import config
 import scanner
 import session
 
-STATS_FILE = Path(__file__).with_name("history_stats.json")
+STATS_FILE = config.DATA / "history_stats.json"
 CATEGORIES = ["常租", "已過期", "未開放", "假日", "其他"]
 HOLIDAY_WORDS = ("節", "國慶", "補假", "紀念日", "春節", "除夕", "連假", "放假")
 
@@ -48,20 +48,20 @@ def label_cells(schedule_html: str) -> dict[tuple[str, int], str]:
     return out
 
 
-def collect(venue: str, since: date, until: date, progress=None) -> dict:
-    with session.SITE_LOCK:
-        return _collect(venue, since, until, progress)
+def collect(acct: session.Account, venue: str, since: date, until: date, progress=None) -> dict:
+    with acct.site_lock:
+        return _collect(acct, venue, since, until, progress)
 
 
-def _collect(venue: str, since: date, until: date, progress=None) -> dict:
-    courts, sk, _page = scanner.open_venue(venue)
+def _collect(acct: session.Account, venue: str, since: date, until: date, progress=None) -> dict:
+    courts, sk, _page = scanner.open_venue(acct, venue)
 
     # counts[weekday][hour][category] = number of court-slots
     counts = defaultdict(lambda: defaultdict(lambda: defaultdict(int)))
     for i, (court_id, court_name) in enumerate(courts):
         if i:
-            session.pause(1.2)
-        cells = label_cells(scanner.fetch_schedule(court_id, sk, since, until))
+            acct.pause(1.2)
+        cells = label_cells(scanner.fetch_schedule(acct, court_id, sk, since, until))
         for (day, hour), cat in cells.items():
             d = date.fromisoformat(day)
             if since <= d < until:
@@ -96,15 +96,16 @@ def load_all() -> dict:
     return json.loads(STATS_FILE.read_text(encoding="utf-8"))
 
 
-def update(venue: str, since: date, progress=None) -> dict:
-    stats = collect(venue, since, date.today(), progress)
+def update(acct: session.Account, venue: str, since: date, progress=None) -> dict:
+    stats = collect(acct, venue, since, date.today(), progress)
     all_stats = load_all()
     all_stats[venue] = stats
-    STATS_FILE.write_text(json.dumps(all_stats, ensure_ascii=False, indent=2), encoding="utf-8")
+    config.write_json(STATS_FILE, all_stats)
     return stats
 
 
 if __name__ == "__main__":
-    venue = sys.argv[1] if len(sys.argv) > 1 else "A:2"
-    since = date.fromisoformat(sys.argv[2]) if len(sys.argv) > 2 else date.today() - timedelta(weeks=8)
-    print_table(update(venue, since, lambda i, n: print(f"  {i}/{n} 面", flush=True)))
+    acct = session.account(sys.argv[1])
+    venue = sys.argv[2] if len(sys.argv) > 2 else "A:2"
+    since = date.fromisoformat(sys.argv[3]) if len(sys.argv) > 3 else date.today() - timedelta(weeks=8)
+    print_table(update(acct, venue, since, lambda i, n: print(f"  {i}/{n} 面", flush=True)))

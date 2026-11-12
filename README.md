@@ -1,75 +1,108 @@
-# 臺大場地預約控制台
+# 臺大場地預約（工作站多人版）
 
-在自己電腦上執行的小工具，搭配臺大體育室場地租借系統（rent.pe.ntu.edu.tw）使用：
+架在一台 Linux 主機（例如資工系工作站）上，你和幾個朋友用手機開網址、用自己的計中帳號登入，搭配臺大體育室場地租借系統（rent.pe.ntu.edu.tw）使用：
 
-- **可租時段搜尋**：一次查詢今天到 7 天後，每個時段還有幾面空場（含「僅限現場租借」），可複選場地。
-- **機器人預訂**：設定多組「場地＋時段」濾網，伺服器開著時會在背景定期掃描，符合的線上空位自動加入清單。
-- **立即預訂**：從機器人清單，或直接點搜尋結果裡的線上空位，一鍵在背景自動選好空場、時段與人數，到學校的確認頁時預訂視窗才跳到最前面，**最後的確認與付款由你自己按**。
-- **歷史熱門度**：統計過去每個星期幾、每個時段被訂光的比例。
-- **訂單管理**：列出網站「常租紀錄」裡的訂單，分成待繳費（含繳費截止日）、已繳費、已取消或已過去；「線上付款」會用已登入的瀏覽器視窗打開學校的付款頁。伺服器開著時會在背景讀取：啟動和登入時先讀（排在搜尋前面），之後每 30 分鐘一次，預訂或付款視窗關掉時也會馬上讀；繳費期限剩 1 天時分頁標籤會變紅。
+- **可租時段搜尋**：今天到 7 天後每個時段還有幾面空場（含「僅限現場租借」），可複選場地。結果大家共用。
+- **機器人**：每個人設定自己的「場地＋時段」濾網。伺服器每幾分鐘**只掃一次**所有人濾網用到的場地，符合的線上空位加入各自的清單，並用 **Discord 私訊**通知。
+- **準備預訂 → 手機確認**：伺服器在背景把表單填到學校的確認頁（濾網開「找到就先準備」時會自動做），私訊你連結；你在手機看過確認頁截圖，按「確認送出」才真的下單，10 分鐘沒按就放棄、什麼都不送。**繳費仍要自己到學校網站。**
+- **訂單管理**：每 30 分鐘讀一次自己的「常租紀錄」；繳費期限剩 1 天時私訊提醒。
+- **歷史熱門度**：過去每個星期幾、每個時段被訂光的比例（管理者更新，大家都看得到）。
 
-不會自動下單、不會繞過驗證碼。
+不會繞過驗證碼；只支援計中帳號（`b12345678`，學校網站的 `b12345678@ntu.edu.tw`）透過計中 SSO 登入。
 
-## 需要
+## 先知道的風險
 
-- Windows 10 / 11（用內建的 Microsoft Edge），或 macOS（用 Edge 或 Chrome，都沒有的話第一次執行會自動下載 Chromium）
-- 網路連線（第一次執行要下載約 75 MB，約 1–3 分鐘）。**不用先裝 Python**
-- 臺大體育室租借系統的帳號
+- **工作站規範**：資工系《工作站帳號使用規範》寫明帳號「限作教學及研究用途」，濫用網路資源初犯停權 1 個月；管理團隊也可能結束長時間執行的程式。架在工作站上是你自己承擔這個風險。
+- **密碼保存**：為了在學校登入過期時自動重新登入、幫大家準備預訂，伺服器會把每個人的**計中密碼加密保存**（`data/`）。能讀到 `data/secret.key` 和 `data/` 的人（例如工作站 root）就能解開。計中帳號也是信箱和選課的帳號，請讓朋友知情同意，只給信任的人用。任何人都可以在「設定」刪除自己在伺服器上的所有資料。
+- **租借規定**：一年內借了沒用、也沒取消達 3 次，一年內不得再借綜合體育館球場。送出前看清楚、訂了就要去或取消。
+- **單一裝置登入**：學校網站可能只允許一個裝置登入，伺服器替你登入時，你手機瀏覽器上的學校網站登入可能會被登出。
+- 服務條款禁止干擾系統運作：掃描間隔最短 3 分鐘，掃描只用一個帳號，人數多也不會多打學校網站。
+
+## 架設（Linux，不需要 root）
+
+```bash
+git clone <this repo> ntu-booking && cd ntu-booking
+deploy/setup.sh                                   # uv、Python 3.12、headless Chromium、cloudflared、加密金鑰
+.venv/bin/python manage.py set-admin b12345678    # 你自己：管理者，也是共用掃描用的帳號
+.venv/bin/python manage.py allow r13922000 b11000000   # 朋友們
+.venv/bin/python manage.py set-discord-token      # 貼上 Discord bot token（不會顯示）
+deploy/run.sh                                     # 啟動網站與 tunnel，印出網址
+deploy/run.sh --cron                              # 印出兩行，貼進 crontab -e，掛掉或重開機會自己起來
+```
+
+- `setup.sh` 最後會試著開一次 headless Chromium。開不起來通常是工作站少了系統函式庫，錯誤訊息會寫是哪個；沒有 root 只能請管理團隊裝，或換一台。
+- 家目錄有配額，Chromium 約 100 MB；可在 `deploy/env` 設 `PLAYWRIGHT_BROWSERS_PATH` 放到 `/tmp2`（會被定期清掉，被清了重跑 `setup.sh`）。
+- 工作站之間共用家目錄時，服務只會在第一次啟動它的那台跑（`data/*.pid` 記著主機名稱）；crontab 也只設在那一台。
+- 停止：`deploy/run.sh --stop`。紀錄在 `data/logs/`。
+
+### 對外網址（Cloudflare Tunnel）
+
+伺服器只聽 `127.0.0.1`，由 `cloudflared` 把 HTTPS 網址接進來，工作站不用開 port。
+
+- **不設定**（預設）：quick tunnel，網址像 `https://xxx.trycloudflare.com`，**每次重啟都會變**；`run.sh` 會把新網址存進設定並私訊給每個設好 Discord 的人。網址一變，大家要重新登入一次。
+- **固定網址**：要有一個放在 Cloudflare 的網域。Cloudflare Zero Trust → Networks → Tunnels 建一個 tunnel，把你的子網域導到 `http://127.0.0.1:<PORT>`，把 token 和網址填進 `deploy/env` 的 `TUNNEL_TOKEN`、`PUBLIC_URL`。
+
+### Discord bot
+
+1. 到 <https://discord.com/developers/applications> 建一個 application → Bot → Reset Token，複製 token，執行 `manage.py set-discord-token`。
+2. OAuth2 → URL Generator 勾 `bot`，用產生的連結把 bot 邀進一個大家都在的 Discord 伺服器（bot 只能私訊和它在同一個伺服器的人）。
+3. 每個人在網站「設定」填自己的 Discord 使用者 ID（Discord 設定 → 進階 → 開發者模式，然後在自己頭像右鍵／長按 →「複製使用者 ID」），按「傳測試訊息」確認收得到。
+
+bot 只用 Discord 的 REST API 發私訊，不需要一直連線，也不會讀任何訊息。
 
 ## 使用
 
-1. Windows：雙擊 `start.bat`。Mac：雙擊 `start.command`（第一次要按右鍵 →「打開」）。第一次執行會自動安裝 [uv](https://docs.astral.sh/uv/)，再用它在資料夾裡的 `.venv` 準備好 Python 3.12 和 Playwright（用來操作瀏覽器），要等一兩分鐘；之後就直接啟動。
-2. 瀏覽器會開啟 <http://127.0.0.1:8765>。
-3. 第一次開啟會跳出「設定」，存好租借系統帳號密碼，再按上方「登入網站」。臺大信箱帳號（例：`b12345678@ntu.edu.tw`）會自動用同一組帳密走計中登入，不用確認碼；其他帳號會開瀏覽器視窗，輸入確認碼完成登入。
-4. 開始使用四個分頁。關掉 `start.bat` 的黑色視窗（Mac 是「終端機」視窗）就會停止。
+1. 手機打開網址，用計中帳號＋密碼登入（伺服器會真的去學校網站登入一次來確認；失敗 5 次會鎖 15 分鐘）。可以「加入主畫面」當 App 用。
+2. 「設定」：填 Discord 使用者 ID、預訂人數（羽球等場地至少 2 人）。
+3. 「機器人」分頁：新增濾網、選場地、在週表格點時段，打開「啟用」。要伺服器找到就先幫你填好，就把「找到就先準備」開著。
+4. 收到 Discord 私訊「已填到學校確認頁」→ 點「打開確認頁」→ 看截圖 →「確認送出」或「取消」。
+5. 「訂單」分頁 →「線上付款」會開學校的付款頁（第一次要在手機上登入學校網站）。
 
-登入大約 1–2 小時會過期。臺大信箱帳號會在過期時自動重新登入（失敗的話 10 分鐘內不再自動嘗試，避免密碼錯誤時一直重試）；其他帳號過期時狀態列會提示，再按一次「登入網站」即可。
+同一個人同時只會有一筆預訂在處理；學校規定一張訂單一面場地，要訂多面時會一面確認完再準備下一面。
 
-## 資料檔（都只存在這個資料夾，不會上傳）
+## 管理
 
-| 檔案 | 內容 |
+```bash
+.venv/bin/python manage.py show                 # 目前設定與使用者
+.venv/bin/python manage.py allow <帳號>          # 也可以在網站「設定」裡加
+.venv/bin/python manage.py deny <帳號>           # 移出名單並登出
+.venv/bin/python manage.py set-scan-account <帳號>  # 換一個帳號負責共用掃描
+```
+
+只有管理者能改掃描間隔、手動掃描、更新歷史熱門度、管理名單。
+
+## 資料（都在 `data/`，權限 700，不進 git）
+
+| 位置 | 內容 |
 |---|---|
-| `credentials.json` | 帳號；密碼在 Windows 以 DPAPI 加密存在這裡，只有同一台電腦、同一個 Windows 帳號能解開；在 Mac 存在「鑰匙圈」 |
-| `session.json` | 網站登入狀態（cookie） |
-| `robot.json` | 濾網、掃描間隔、預訂人數 |
-| `hits.json` | 機器人自動加入的清單 |
-| `orders.json` | 最近一次讀到的訂單 |
-| `search_cache.json` | 最近一次查到的時段資料（快取 10 分鐘） |
-| `history_stats.json` | 歷史熱門度統計 |
-| `snapshots/` | 最近抓到的訂場頁面，除錯用 |
+| `config.json` | 允許名單、管理者、掃描帳號、Discord bot token、公開網址、掃描間隔 |
+| `secret.key` | 加密密碼用的金鑰（也可改用環境變數 `NTU_BOOKING_KEY`） |
+| `web_sessions.json` | 這個網站的登入（只存 token 的雜湊） |
+| `users/<帳號>/` | `credentials.json`（加密的密碼）、`session.json`（學校網站的 cookie）、`robot.json`（濾網、人數、Discord ID）、`hits.json`、`orders.json` |
+| `search_cache.json`、`history_stats.json` | 共用的時段快取與歷史統計 |
+| `snapshots/` | 抓到的學校網頁，除錯用（含確認頁） |
+| `logs/` | `run.sh` 的伺服器與 tunnel 紀錄 |
 
-要分享給別人時，**不要**附上上面這些檔案。刪掉它們就等於回到全新狀態。
+## 本機開發測試（Windows）
 
-## 執行環境
+雙擊 `start.bat`（或 `.venv\Scripts\python.exe server.py`），先 `manage.py set-admin <你的帳號>`，再開 <http://127.0.0.1:8765>。本機沒裝 Playwright 的 Chromium 時會改用 Edge（一樣是 headless）。
 
-- Python 和套件都在資料夾裡的 `.venv`，不會動到電腦上其他的 Python。刪掉 `.venv`，下次啟動會重新準備。
-- uv 裝在 `使用者資料夾\.localin`（Mac 是 `~/.local/bin`）。
-- 用的 Python 版本寫在 `start.bat` / `start.command` 開頭的 `PYTHON_VERSION`；改了之後下次啟動會自動換掉 `.venv`。
-- 也可以自己用 Python 3.10 以上執行 `python server.py`（要先 `pip install -r requirements.txt`）。
-
-## Mac 的小提醒
-
-- 如果雙擊 `start.command` 出現「沒有權限」（例如從 Windows 壓縮傳過來的），在「終端機」輸入 `bash `（後面有空白），把 `start.command` 拖進去再按 Enter。
-- 從 Windows 帶過來的 `credentials.json` 在 Mac 上解不開，要在「設定」重新輸入密碼。
-- 填表單時預訂視窗會先縮到 Dock，到確認頁才打開。如果沒有自己跳到最前面，到 Dock 點一下就好。
-
-## 注意
-
-- 依《校總區運動場館管理辦法實施細則》：球類場地須於租借日前 7 至 3 天申請，申請後須於租借日前 2 天繳費；一年內未使用也未取消達 3 次，一年內不得再借綜合體育館球場；會員證不得供他人使用。
-- 服務條款禁止干擾系統運作，掃描間隔最短 3 分鐘，請不要調得更頻繁。
-- 租借系統可能只允許單一裝置登入，用這個工具登入時，其他裝置的登入可能會被登出。
-- 「立即預訂」一次只處理一面場地（學校規定一張訂單只能租一面）；訂多面時會一面完成、關掉分頁後才開下一面。
+原本的單機桌面版保留在 git tag `desktop-v1`。
 
 ## 檔案結構
 
 | 檔案 | 用途 |
 |---|---|
-| `server.py` | 本機網頁伺服器與 API（只接受 127.0.0.1） |
+| `server.py` | 網頁伺服器與 API：登入、每人的資料、機器人與預訂的串接 |
+| `config.py` | `data/` 的位置與 `config.json` |
+| `session.py` | 每個人的學校網站登入（`Account`：計中 SSO、cookie、每帳號一把鎖、自動重新登入） |
+| `credentials.py` | 密碼加密儲存（Fernet） |
 | `scanner.py` | 讀取網站時段表、解析、快取；搜尋與機器人共用 |
-| `robot.py` | 背景機器人、濾網、自動清單 |
-| `orders.py` | 訂單管理：讀取「常租紀錄」的訂單與繳費狀態 |
-| `booker.py` | 立即預訂：用瀏覽器填好表單停在確認頁 |
-| `history.py` | 歷史熱門度統計（也可單獨執行：`python history.py A:2 2026-09-07`） |
-| `session.py` | 登入流程與帶登入狀態的請求 |
-| `credentials.py` | 帳密加密儲存 |
-| `static/index.html` | 操作介面 |
+| `robot.py` | 共用的背景掃描、每人的濾網與清單 |
+| `booker.py` | 準備預訂：headless 填到確認頁、等手機確認、送出並核對訂單 |
+| `notify.py` | Discord 私訊 |
+| `orders.py` | 讀取「常租紀錄」的訂單與繳費狀態 |
+| `history.py` | 歷史熱門度統計（也可單獨執行：`python history.py <帳號> A:2 2026-09-07`） |
+| `manage.py` | 命令列管理 |
+| `deploy/` | `setup.sh`、`run.sh`（看門狗）、`env.example` |
+| `static/index.html` | 操作介面（手機優先） |

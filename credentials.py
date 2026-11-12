@@ -1,116 +1,55 @@
-"""Store NTU rent-system credentials locally.
+"""Store each person's 計中 password, encrypted, in data/users/<account>/credentials.json.
 
-The username goes in plain JSON. The password is encrypted with Windows DPAPI (CryptProtectData) on
-Windows, so only the current Windows user on this machine can decrypt it, and kept in the login Keychain
-on macOS. Nothing is sent over the network.
+The password is encrypted with Fernet (AES + HMAC). The key comes from the NTU_BOOKING_KEY environment
+variable, or data/secret.key (created on first use, readable only by the account running the server).
+Anyone who can read both the key and the data folder (e.g. the machine's root) can decrypt them; the
+people using the service should know that.
 """
-import base64
 import json
-import sys
-from pathlib import Path
+import os
 
-CRED_FILE = Path(__file__).with_name("credentials.json")
-KEYCHAIN_SERVICE = "ntu-booking"
+from cryptography.fernet import Fernet, InvalidToken
 
-if sys.platform == "win32":
-    import ctypes
-    import ctypes.wintypes as wt
+import config
 
-    class _Blob(ctypes.Structure):
-        _fields_ = [("cbData", wt.DWORD), ("pbData", ctypes.POINTER(ctypes.c_char))]
-
-    def _to_blob(data: bytes) -> _Blob:
-        buf = ctypes.create_string_buffer(data, len(data))
-        return _Blob(len(data), ctypes.cast(buf, ctypes.POINTER(ctypes.c_char)))
-
-    def _from_blob(blob: _Blob) -> bytes:
-        data = ctypes.string_at(blob.pbData, blob.cbData)
-        ctypes.windll.kernel32.LocalFree(blob.pbData)
-        return data
-
-    def _protect(data: bytes) -> bytes:
-        out = _Blob()
-        if not ctypes.windll.crypt32.CryptProtectData(
-            ctypes.byref(_to_blob(data)), None, None, None, None, 0, ctypes.byref(out)
-        ):
-            raise ctypes.WinError()
-        return _from_blob(out)
-
-    def _unprotect(data: bytes) -> bytes:
-        out = _Blob()
-        if not ctypes.windll.crypt32.CryptUnprotectData(
-            ctypes.byref(_to_blob(data)), None, None, None, None, 0, ctypes.byref(out)
-        ):
-            raise ctypes.WinError()
-        return _from_blob(out)
+KEY_FILE = config.DATA / "secret.key"
+_fernet: Fernet | None = None
 
 
-def _keychain(action: str, username: str, password: str | None = None) -> str | None:
-    """get / set / delete the Keychain item of `username`. Keychain failures come out as OSError, like DPAPI's."""
+def _key() -> Fernet:
+    global _fernet
+    if _fernet is None:
+        key = os.environ.get("NTU_BOOKING_KEY", "").encode()
+        if not key:
+            if not KEY_FILE.exists():
+                config.init_dirs()
+                KEY_FILE.write_bytes(Fernet.generate_key())
+                if os.name == "posix":
+                    os.chmod(KEY_FILE, 0o600)
+            key = KEY_FILE.read_bytes().strip()
+        _fernet = Fernet(key)
+    return _fernet
+
+
+def _file(account: str):
+    return config.user_dir(account) / "credentials.json"
+
+
+def save(account: str, password: str) -> None:
+    token = _key().encrypt(password.encode("utf-8")).decode("ascii")
+    config.write_json(_file(account), {"account": account, "password": token})
+
+
+def load(account: str) -> str | None:
+    """The stored password, or None when there is none or it can't be decrypted (key changed)."""
+    f = _file(account)
+    if not f.exists():
+        return None
     try:
-        import keyring
-        import keyring.errors
-
-        if action == "get":
-            return keyring.get_password(KEYCHAIN_SERVICE, username)
-        if action == "set":
-            keyring.set_password(KEYCHAIN_SERVICE, username, password)
-        else:
-            try:
-                keyring.delete_password(KEYCHAIN_SERVICE, username)
-            except keyring.errors.PasswordDeleteError:  # not there
-                pass
-        return None
-    except ImportError as e:
-        raise OSError("keyring 套件沒有安裝") from e
-    except keyring.errors.KeyringError as e:
-        raise OSError(f"鑰匙圈存取失敗：{e}") from e
-
-
-def _read() -> dict | None:
-    return json.loads(CRED_FILE.read_text(encoding="utf-8")) if CRED_FILE.exists() else None
-
-
-def save(username: str, password: str) -> None:
-    old = _read()
-    if sys.platform == "win32":
-        entry = {"password_dpapi": base64.b64encode(_protect(password.encode("utf-8"))).decode("ascii")}
-    else:
-        _keychain("set", username, password)
-        entry = {"password_keychain": True}
-        if old and old.get("password_keychain") and old["username"] != username:
-            _keychain("delete", old["username"])
-    CRED_FILE.write_text(json.dumps({"username": username, **entry}, ensure_ascii=False, indent=2), encoding="utf-8")
-
-
-def load() -> tuple[str, str] | None:
-    data = _read()
-    if data is None:
-        return None
-    if "password_dpapi" in data:
-        if sys.platform != "win32":
-            raise OSError("密碼是在 Windows 上儲存的")
-        password = _unprotect(base64.b64decode(data["password_dpapi"])).decode("utf-8")
-    else:
-        password = _keychain("get", data["username"])
-        if password is None:
-            raise OSError("鑰匙圈裡找不到密碼")
-    return data["username"], password
-
-
-def load_or_none() -> tuple[str, str] | None:
-    """Like load(), but None when the saved password can't be read (other machine, user or OS)."""
-    try:
-        return load()
-    except OSError:
+        return _key().decrypt(json.loads(f.read_text(encoding="utf-8"))["password"].encode()).decode("utf-8")
+    except (InvalidToken, KeyError, ValueError):
         return None
 
 
-def delete() -> None:
-    data = _read()
-    if data and data.get("password_keychain"):
-        try:
-            _keychain("delete", data["username"])
-        except OSError:  # still drop the file, so the account can be entered again
-            pass
-    CRED_FILE.unlink(missing_ok=True)
+def delete(account: str) -> None:
+    _file(account).unlink(missing_ok=True)

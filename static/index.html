@@ -2,8 +2,10 @@
 <html lang="zh-Hant-TW">
 <head>
 <meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
-<title>臺大場地預約控制台</title>
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#1f5fbf">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<title>臺大場地預約</title>
 <style>
   :root {
     --bg: #f4f5f7;
@@ -221,6 +223,8 @@
   .hit .due { font-size: 12.5px; color: var(--warn); }
   .hit .due.late { color: var(--err); font-weight: 600; }
   .orders-error { color: var(--err); margin: 0 0 10px; }
+  a.btnlink { display: inline-block; text-decoration: none; border-radius: 7px; border: 1px solid var(--line); color: var(--text); padding: 4px 10px; font-size: 13px; }
+  a.btnlink.primary { background: var(--accent); border-color: var(--accent); color: #fff; font-weight: 600; }
   .tab.urgent, .tab.urgent[aria-selected="true"] { color: var(--err); font-weight: 600; }
 
   dialog.modal { width: min(460px, calc(100% - 32px)); padding: 18px; border: 1px solid var(--line); border-radius: var(--radius);
@@ -234,22 +238,88 @@
     background: var(--text); color: var(--bg); padding: 9px 16px; border-radius: 8px; pointer-events: none; z-index: 10; max-width: calc(100% - 32px); }
   .toast.show { opacity: 1; transform: translateX(-50%) translateY(0); }
   .toast.err { background: var(--err); color: #fff; }
+
+  /* login screen */
+  .login { max-width: 380px; margin: 12vh auto 40px; padding: 0 16px; }
+  .login h1 { font-size: 20px; margin: 0 0 6px; }
+  .login section.card { margin-top: 16px; }
+  .login button.primary { width: 100%; padding: 11px; font-size: 15px; }
+
+  /* the booking waiting for the person's confirmation */
+  .prep { border: 2px solid var(--accent); border-radius: var(--radius); padding: 14px; margin-bottom: 14px; background: var(--accent-soft); }
+  .prep.failed, .prep.expired { border-color: var(--err); background: var(--err-soft); }
+  .prep.done { border-color: var(--ok); background: var(--ok-soft); }
+  .prep.cancelled { border-color: var(--line); background: var(--bg); }
+  .prep h3 { margin: 0 0 4px; font-size: 15px; display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+  .prep h3 button { margin-left: auto; }
+  .prep .msg { margin: 0 0 10px; }
+  .prep .big { display: flex; gap: 10px; flex-wrap: wrap; }
+  .prep .big button { flex: 1; min-width: 130px; padding: 12px; font-size: 16px; }
+  .prep img { display: block; max-width: 100%; border: 1px solid var(--line); border-radius: 8px; margin-top: 12px; }
+  .prep .count { font-family: var(--mono); font-variant-numeric: tabular-nums; }
+  .hit.flash { animation: flash 1.6s ease 2; }
+  @keyframes flash { 50% { box-shadow: 0 0 0 4px var(--accent); } }
+  .admin-list { display: flex; flex-wrap: wrap; gap: 6px; margin: 8px 0; }
+  .admin-list .tag { display: inline-flex; gap: 4px; align-items: center; padding: 2px 4px 2px 10px; border-radius: 999px; background: var(--bg); border: 1px solid var(--line); font-size: 13px; }
+
+  /* phones */
+  @media (max-width: 640px) {
+    body { font-size: 15px; padding-bottom: calc(64px + env(safe-area-inset-bottom)); }
+    header { padding: 10px 12px; gap: 8px; }
+    header h1 { font-size: 16px; width: 100%; }
+    header .spacer { display: none; }
+    main { padding: 10px; gap: 12px; }
+    section.card { padding: 12px; border-radius: 0; border-left: none; border-right: none; margin: 0 -10px; }
+    button { padding: 9px 14px; }
+    button.small { padding: 7px 12px; font-size: 14px; }
+    .chip span { padding: 7px 13px; font-size: 14px; }
+    .tabs { position: fixed; left: 0; right: 0; bottom: 0; margin: 0; z-index: 6; background: var(--card);
+      border-top: 1px solid var(--line); border-bottom: none; padding-bottom: env(safe-area-inset-bottom); }
+    .tab { flex: 1; padding: 12px 2px; font-size: 13px; border-bottom: none; border-top: 3px solid transparent; }
+    .tab[aria-selected="true"] { border-top-color: var(--accent); border-bottom-color: transparent; }
+    .scanbar .push { margin-left: 0; }
+    table.week { min-width: 560px; }
+    table.week th:first-child, table.week tbody th { position: sticky; left: 0; z-index: 1; background: var(--card); width: 52px; }
+    table.week td { height: 34px; }
+    .hit .when { margin-left: 0; width: 100%; }
+    .hit .acts { width: 100%; justify-content: flex-end; }
+    .tip { display: none !important; }
+    .logs { max-height: 200px; }
+  }
+  /* touch screens: let a finger scroll the timetables; a tap still toggles a cell */
+  @media (pointer: coarse) { table.week { touch-action: pan-x pan-y; } }
 </style>
 </head>
 <body>
+<div class="login" id="loginScreen" hidden>
+  <h1>臺大場地預約</h1>
+  <p class="hint">用自己的計中帳號登入（只限管理者加入名單的帳號）。</p>
+  <section class="card">
+    <form id="loginForm">
+      <label class="field"><span>計中帳號</span>
+        <input id="loginAccount" type="text" autocomplete="username" autocapitalize="none" spellcheck="false" placeholder="例：b12345678" required></label>
+      <label class="field"><span>計中密碼</span>
+        <div class="pw-wrap"><input id="loginPassword" type="password" autocomplete="current-password" required>
+          <button type="button" class="ghost" id="togglePw">顯示</button></div></label>
+      <button type="submit" class="primary" id="loginGo">登入</button>
+      <p class="hint" id="loginMsg"></p>
+    </form>
+  </section>
+  <p class="hint">登入時伺服器會真的用這組帳密登入學校的租借系統。密碼會加密存在伺服器上，讓它在學校登入過期時自動重新登入、幫你準備預訂；伺服器管理者仍有辦法讀到，請只在信任管理者時使用。隨時可以在「設定」刪除自己的所有資料。</p>
+</div>
+
+<div id="app" hidden>
 <header>
-  <h1>臺大場地預約控制台</h1>
+  <h1>臺大場地預約</h1>
   <span class="spacer"></span>
-  <span id="acctPill" class="pill warn">尚未設定帳號</span>
-  <span id="sessionPill" class="pill warn">網站未登入</span>
-  <button type="button" class="small primary" id="loginBtn">登入網站</button>
-  <button type="button" class="small ghost" id="logoutBtn">清除登入</button>
+  <span id="acctPill" class="pill info"></span>
+  <span id="sessionPill" class="pill warn">學校網站未登入</span>
   <button type="button" class="small" data-open-settings>設定</button>
 </header>
 
 <main>
   <section class="card wide">
-    <div class="book-bar" id="bookBar" hidden></div>
+    <div id="prepBox"></div>
     <div class="tabs" role="tablist">
       <button type="button" role="tab" class="tab" data-tab="search" aria-selected="true">可租時段搜尋</button>
       <button type="button" role="tab" class="tab" data-tab="filter" aria-selected="false">機器人預訂</button>
@@ -282,7 +352,7 @@
     </div>
 
     <div class="tabpanel" id="panel-filter" hidden>
-    <p class="hint tab-hint">已啟用的濾網會定期掃描，符合的線上空位自動加入清單。</p>
+    <p class="hint tab-hint">已啟用的濾網會定期掃描（大家共用一次掃描），符合的線上空位會加入你的清單並用 Discord 通知你；開了「找到就先準備」的濾網會直接幫你填到學校確認頁。</p>
 
     <div class="scanbar">
       <span><span class="k">狀態</span> <span class="v" id="robotStatus">—</span></span>
@@ -308,6 +378,7 @@
       <div class="toolbar">
         <div class="group"><span class="label">名稱</span><input id="fName" type="text" class="compact" maxlength="30"></div>
         <label class="switch"><input type="checkbox" id="watchEnabled"><span class="track"></span><span id="watchLabel">已停用</span></label>
+        <label class="switch" title="找到空位時，伺服器先填到學校確認頁，你只要按確認送出"><input type="checkbox" id="watchAuto"><span class="track"></span><span>找到就先準備</span></label>
         <button type="button" class="small danger" id="fDelete">刪除濾網</button>
       </div>
       <div class="toolbar">
@@ -345,7 +416,7 @@
       <details class="fold"><summary>最難訂／最好訂排行</summary><div class="hot-list" id="hotList"></div></details>
     </div>
     <div class="tabpanel" id="panel-orders" hidden>
-      <p class="hint tab-hint">網站「常租紀錄」裡的訂單。付款請按「線上付款」，在開啟的視窗完成。</p>
+      <p class="hint tab-hint">學校網站「常租紀錄」裡的訂單。「線上付款」會開學校的付款頁，第一次要在手機上用計中帳號登入學校網站。</p>
       <div class="toolbar">
         <button type="button" class="small" id="ordersRefresh">重新整理</button>
         <span class="hint" id="ordersMeta" style="margin:0"></span>
@@ -380,28 +451,35 @@
     </section>
   </div>
 </main>
+</div>
 
 <dialog class="modal" id="settings">
   <h2>設定 <button type="button" class="small ghost" id="closeSettings" aria-label="關閉">✕</button></h2>
-  <form id="credForm" autocomplete="off">
-    <label class="field"><span>租借系統帳號（電子信箱）</span>
-      <input id="username" type="text" placeholder="例：b12345678@ntu.edu.tw">
-    </label>
-    <label class="field"><span>密碼</span>
-      <div class="pw-wrap">
-        <input id="password" type="password" placeholder="請輸入密碼">
-        <button type="button" class="ghost" id="togglePw">顯示</button>
-      </div>
-    </label>
-    <div class="actions">
-      <button type="submit" class="primary">儲存帳號</button>
-      <button type="button" class="danger" id="deleteCred">刪除已存資料</button>
-    </div>
-    <p class="hint">密碼加密存在本機。臺大信箱帳號會自動用計中登入。</p>
-  </form>
+  <p id="meLine" style="margin:0"></p>
+  <p class="hint" id="meLoginError" style="color:var(--err)" hidden></p>
+  <h3 class="sub">Discord 通知</h3>
+  <label class="field"><span>Discord 使用者 ID</span>
+    <input id="discordId" type="text" inputmode="numeric" placeholder="例：123456789012345678"></label>
+  <div class="actions">
+    <button type="button" class="primary" id="discordSave">儲存</button>
+    <button type="button" id="discordTest">傳測試訊息</button>
+  </div>
+  <p class="hint" id="discordHint">Discord「設定 → 進階 → 開發者模式」打開後，在自己的頭像按右鍵（手機長按）→「複製使用者 ID」。你要和 bot 在同一個 Discord 伺服器，它才能私訊你。</p>
   <h3 class="sub">預訂人數</h3>
   <div class="group" id="members"></div>
   <p class="hint">羽球等場地至少 2 人</p>
+  <div id="adminBox" hidden>
+    <h3 class="sub">允許登入的帳號（管理者）</h3>
+    <div class="admin-list" id="allowList"></div>
+    <div class="actions"><input id="allowAdd" type="text" class="compact" placeholder="計中帳號" autocapitalize="none">
+      <button type="button" class="small" id="allowAddBtn">加入</button></div>
+    <p class="hint" id="adminHint"></p>
+  </div>
+  <h3 class="sub">帳號</h3>
+  <div class="actions">
+    <button type="button" id="logoutBtn">登出</button>
+    <button type="button" class="danger" id="deleteMe">刪除我在伺服器上的所有資料</button>
+  </div>
 </dialog>
 
 <dialog class="modal" id="bookDialog">
@@ -411,8 +489,8 @@
   <label class="field"><span>面數</span>
     <input id="bookQty" type="number" min="1" value="1"></label>
   <p class="hint members-line" id="bookMembers"></p>
-  <div class="actions"><button type="button" class="primary" id="bookGo">開啟預訂視窗</button></div>
-  <p class="hint">最後的確認與付款請在預訂視窗完成</p>
+  <div class="actions"><button type="button" class="primary" id="bookGo">準備預訂</button></div>
+  <p class="hint">伺服器會幫你填到學校的確認頁，你看過內容再按「確認送出」才會真的下單；繳費請自己到學校網站。</p>
 </dialog>
 
 <div class="toast" id="toast"></div>
@@ -439,56 +517,113 @@ function toast(msg, isErr = false) {
 }
 
 // Wraps an async event handler so a failed request shows up as an error toast instead of vanishing.
-const guard = (fn) => async (...args) => { try { await fn(...args); } catch (err) { toast(err.message, true); } };
+const guard = (fn) => async (...args) => { try { await fn(...args); } catch (err) { if (!(err instanceof LoggedOut)) toast(err.message, true); } };
 
+class LoggedOut extends Error {}
 async function api(path, opts = {}) {
-  const res = await fetch(path, { headers: { "Content-Type": "application/json" }, ...opts });
+  const res = await fetch(path, { headers: { "Content-Type": "application/json" }, credentials: "same-origin", ...opts });
   const data = await res.json().catch(() => ({}));
-  if (!res.ok) throw new Error(data.error || `HTTP ${res.status}`);
+  if (res.status === 401 && path !== "/api/login") { showLogin(); throw new LoggedOut(data.error || "請先登入"); }
+  if (!res.ok) { const e = new Error(data.error || `HTTP ${res.status}`); e.data = data; throw e; }
   return data;
 }
 
-/* ---------- credentials ---------- */
-async function loadCred() {
-  const c = await api("/api/credentials");
-  $("username").value = c.username || "";
-  $("password").value = "";
-  $("password").placeholder = c.has_password ? "已儲存（留空則不變更）" : "請輸入密碼";
-  const pill = $("acctPill");
-  if (c.error) { pill.className = "pill err"; pill.textContent = c.error; }
-  else if (c.has_password) { pill.className = "pill ok"; pill.textContent = `帳號：${c.username}`; }
-  else { pill.className = "pill warn"; pill.textContent = "尚未設定帳號"; }
-  return c;
+/* ---------- this person (web app login, Discord, admin) ---------- */
+let me = null;
+let timers = [];
+
+function showLogin() {
+  timers.forEach(clearInterval); timers = [];
+  me = null;
+  $("app").hidden = true;
+  $("loginScreen").hidden = false;
+  if ($("settings").open) $("settings").close();
 }
 
-/* ---------- settings dialog ---------- */
-function openSettings() { loadCred(); $("settings").showModal(); }
+async function loadMe() {
+  me = await api("/api/me");
+  renderMe();
+  return me;
+}
+
+function renderMe() {
+  $("acctPill").textContent = me.account + (me.admin ? "（管理者）" : "");
+  const pill = $("sessionPill");
+  if (me.school_login) { pill.className = "pill ok"; pill.textContent = "學校網站已登入"; }
+  else if (me.login_error) { pill.className = "pill err"; pill.textContent = "學校網站登入失敗"; pill.title = me.login_error; }
+  else { pill.className = "pill warn"; pill.textContent = "學校網站未登入（需要時會自動登入）"; }
+  $("meLine").innerHTML = `計中帳號 <b>${escapeHtml(me.account)}</b>${me.admin ? "（管理者）" : ""}`;
+  $("meLoginError").hidden = !me.login_error;
+  $("meLoginError").textContent = me.login_error || "";
+  if (document.activeElement !== $("discordId")) $("discordId").value = me.discord_id || "";
+  $("discordTest").disabled = !me.discord_id || !me.discord_ready;
+  if (!me.discord_ready) $("discordHint").textContent = "伺服器還沒設定 Discord bot，請管理者執行 manage.py set-discord-token。";
+  $("adminBox").hidden = !me.admin;
+  if (me.admin) {
+    $("allowList").innerHTML = [...new Set([...me.admins, ...me.allowed])].map((a) => `<span class="tag">${escapeHtml(a)}${
+      me.admins.includes(a) ? "（管理者）" : `<button type="button" class="small ghost" data-deny="${escapeHtml(a)}" aria-label="移除">✕</button>`}</span>`).join("");
+    $("adminHint").textContent = `掃描帳號：${me.scan_account || "未設定"}・公開網址：${me.public_url || "未設定"}`;
+  }
+}
+
+function openSettings() { loadMe().catch(() => {}); renderMembers(); $("settings").showModal(); }
 document.addEventListener("click", (e) => { if (e.target.closest("[data-open-settings]")) openSettings(); });
 $("closeSettings").onclick = () => $("settings").close();
 $("settings").addEventListener("click", (e) => { if (e.target === $("settings")) $("settings").close(); }); // backdrop
 
 $("togglePw").onclick = () => {
-  const p = $("password");
+  const p = $("loginPassword");
   p.type = p.type === "password" ? "text" : "password";
   $("togglePw").textContent = p.type === "password" ? "顯示" : "隱藏";
 };
 
-$("credForm").onsubmit = async (e) => {
+$("loginForm").onsubmit = async (e) => {
   e.preventDefault();
+  $("loginGo").disabled = true;
+  $("loginGo").textContent = "登入中（約 10 秒）…";
+  $("loginMsg").textContent = "";
   try {
-    await api("/api/credentials", { method: "POST", body: JSON.stringify({ username: $("username").value, password: $("password").value }) });
-    toast("帳號已儲存");
-    await loadCred();
-    refreshLogs();
-  } catch (err) { toast(err.message, true); }
+    await api("/api/login", { method: "POST", body: JSON.stringify({ account: $("loginAccount").value, password: $("loginPassword").value }) });
+    $("loginPassword").value = "";
+    start();
+  } catch (err) {
+    $("loginMsg").textContent = err.message;
+    $("loginMsg").style.color = "var(--err)";
+  } finally {
+    $("loginGo").disabled = false;
+    $("loginGo").textContent = "登入";
+  }
 };
 
-$("deleteCred").onclick = guard(async () => {
-  if (!confirm("確定要刪除已儲存的帳號密碼？")) return;
-  await api("/api/credentials", { method: "DELETE" });
+$("logoutBtn").onclick = guard(async () => {
+  await api("/api/logout", { method: "POST" });
+  showLogin();
+});
+$("deleteMe").onclick = guard(async () => {
+  if (!confirm("確定要刪除你在伺服器上的所有資料？（存的密碼、學校登入、濾網、清單、訂單紀錄）學校網站上的訂單不受影響。")) return;
+  await api("/api/me", { method: "DELETE" });
+  showLogin();
   toast("已刪除");
-  loadCred();
-  refreshLogs();
+});
+$("discordSave").onclick = guard(async () => {
+  await api("/api/me/discord", { method: "POST", body: JSON.stringify({ discord_id: $("discordId").value.trim() }) });
+  await loadMe();
+  toast("已儲存 Discord ID");
+});
+$("discordTest").onclick = guard(async () => {
+  await api("/api/me/discord/test", { method: "POST" });
+  toast("已送出測試訊息，看看 Discord 私訊");
+});
+$("allowAddBtn").onclick = guard(async () => {
+  await api("/api/admin/allow", { method: "POST", body: JSON.stringify({ account: $("allowAdd").value, allow: true }) });
+  $("allowAdd").value = "";
+  await loadMe();
+});
+$("allowList").onclick = guard(async (e) => {
+  const a = e.target.dataset.deny;
+  if (!a || !confirm(`把 ${a} 移出允許名單？他會被登出。`)) return;
+  await api("/api/admin/allow", { method: "POST", body: JSON.stringify({ account: a, allow: false }) });
+  await loadMe();
 });
 
 function countdown(at) {
@@ -528,7 +663,7 @@ $("clearLogView").onclick = () => { logCutoff = refreshLogs.total || 0; refreshL
 /* ---------- robot: filters (weekly timetables) + auto hit list ---------- */
 const DAY_LABELS = ["週一", "週二", "週三", "週四", "週五", "週六", "週日"]; // index = Python weekday
 let HOURS = []; // every start hour any venue's timetable has, from the server
-const EMPTY_FILTER = { id: null, name: "", enabled: false, venues: [], slots: {} };
+const EMPTY_FILTER = { id: null, name: "", enabled: false, venues: [], slots: {}, auto_prepare: true };
 let robotData = { state: {}, filters: [], hits: [] };
 let watch = EMPTY_FILTER; // the filter being edited (heatmap clicks also edit this one)
 let bookDates = {}; // weekday -> ISO date currently inside the online booking window
@@ -606,6 +741,7 @@ function renderFilterEditor() {
       <span>${v.name}・${v.sport}</span></label>`).join("");
   $("watchEnabled").checked = watch.enabled;
   $("watchLabel").textContent = watch.enabled ? "啟用中" : "已停用";
+  $("watchAuto").checked = watch.auto_prepare !== false;
   renderWeek();
 }
 
@@ -619,17 +755,13 @@ function selectFilter(id) {
 
 function renderRobotState() {
   const r = robotData, st = r.state || {};
-  const pill = $("sessionPill");
-  if (r.login_in_progress) { pill.className = "pill warn"; pill.textContent = "登入中…"; }
-  else if (r.has_session) { pill.className = "pill ok"; pill.textContent = "網站已登入"; }
-  else { pill.className = "pill warn"; pill.textContent = "網站未登入"; }
-  $("loginBtn").disabled = !!r.login_in_progress;
-
   const active = r.filters.filter((f) => f.enabled && f.venues.length && Object.keys(f.slots).length).length;
-  $("robotStatus").textContent = r.book_job && r.book_job.running && !st.running ? "暫停（預訂視窗開著）"
-    : st.running
+  $("interval").disabled = !r.can_set_interval;
+  $("interval").title = r.can_set_interval ? "" : "大家共用的掃描間隔，只有管理者能改";
+  $("scanBtn").hidden = !r.can_set_interval;
+  $("robotStatus").textContent = st.running
     ? `掃描中 ${vShort(st.venue || "")} ${st.done || 0}/${st.total || "?"}`
-    : active ? `運作中（${active} 個濾網啟用）` : "待命（沒有啟用的濾網）";
+    : st.next_scan ? `運作中（你有 ${active} 個濾網啟用）` : "待命（沒有人啟用濾網）";
   $("lastScan").textContent = fmtTime(st.last_scan);
   const left = st.next_scan ? new Date(st.next_scan) - new Date() : 0;
   $("nextScan").textContent = !st.next_scan ? "—"
@@ -644,13 +776,13 @@ function renderHits() {
   const avail = hits.filter((h) => h.status === "available");
   $("hitCount").textContent = hits.length ? `可訂 ${avail.length} 筆${hits.length > avail.length ? `・已失效 ${hits.length - avail.length} 筆` : ""}` : "";
   $("clearGone").hidden = hits.length === avail.length;
-  document.title = avail.length ? `(${avail.length}) 有空位！臺大場地預約控制台` : "臺大場地預約控制台";
+  document.title = avail.length ? `(${avail.length}) 有空位！臺大場地預約` : "臺大場地預約";
   // Don't rebuild the rows while a quantity box is being edited (the 2 s poll would steal focus).
   if (document.activeElement && document.activeElement.matches("#hits input[data-want]")) return;
   const sorted = [...avail, ...hits.filter((h) => h.status !== "available")];
-  const busy = robotData.book_job && robotData.book_job.running;
+  const busy = !!activePrep();
   $("hits").innerHTML = sorted.length ? sorted.map((h) => `
-    <div class="hit ${h.status}">
+    <div class="hit ${h.status}" id="hit-${h.id}">
       <span class="pill ${h.status === "available" ? "ok" : "warn"}">${h.status === "available" ? "可訂" : "售罄"}</span>
       <b>${fmtDate(h.date)} ${timeRange(h.hour, 1)}</b>
       <span>${venueName(h.venue)}${h.status === "available" ? `・線上 ${h.count} 面` : ""}</span>
@@ -660,7 +792,7 @@ function renderHits() {
       ${h.status === "available" ? `<label class="want">預訂
         <input type="number" min="1" max="${h.count}" value="${Math.min(h.want || 1, h.count)}" data-want="${h.id}" ${busy ? "disabled" : ""}>
         面</label>
-        <button type="button" class="small primary" data-book="${h.id}" ${busy ? "disabled" : ""}>立即預訂</button>` : ""}
+        <button type="button" class="small primary" data-book="${h.id}" ${busy ? "disabled" : ""}>準備預訂</button>` : ""}
       <button type="button" class="small ghost" data-dismiss="${h.id}" title="從清單移除">✕</button>
       </span>
     </div>`).join("") : '<div class="empty">目前沒有符合濾網的空位</div>';
@@ -716,6 +848,7 @@ $("week").addEventListener("pointerover", (e) => {
   if (td && isSel(td.dataset.wd, Number(td.dataset.h)) !== paint) { setSel(td.dataset.wd, Number(td.dataset.h), paint); renderWeek(); }
 });
 window.addEventListener("pointerup", () => { if (paint !== null) { paint = null; saveWatch(); } });
+window.addEventListener("pointercancel", () => { if (paint !== null) { paint = null; saveWatch(); } });
 
 document.querySelectorAll("[data-preset]").forEach((b) => (b.onclick = () => {
   const p = b.dataset.preset;
@@ -730,6 +863,7 @@ $("watchVenues").onchange = () => {
   renderWeek(); saveWatch();
 };
 $("fName").oninput = () => { watch.name = $("fName").value; saveWatch(); };
+$("watchAuto").onchange = () => { watch.auto_prepare = $("watchAuto").checked; saveWatch(); };
 $("watchEnabled").onchange = () => {
   if ($("watchEnabled").checked) {
     if (!Object.keys(watch.slots).length) { toast("請先在時間表選取時段", true); $("watchEnabled").checked = false; return; }
@@ -746,7 +880,7 @@ $("filterTabs").onclick = async (e) => {
   if (tab.id === "fAdd") {
     try {
       const f = await api("/api/robot/filters", { method: "POST", body: JSON.stringify({
-        name: `濾網 ${robotData.filters.length + 1}`, enabled: false, venues: [searchSel[0] || venues[0].id], slots: {},
+        name: `濾網 ${robotData.filters.length + 1}`, enabled: false, venues: [searchSel[0] || venues[0].id], slots: {}, auto_prepare: true,
       }) });
       robotData.filters.push(f);
       selectFilter(f.id);
@@ -773,10 +907,11 @@ $("hits").onclick = guard(async (e) => {
   const book = e.target.dataset.book, dismiss = e.target.dataset.dismiss;
   if (book) {
     try {
-      await api(`/api/robot/hits/${book}/book`, { method: "POST" });
-      toast("正在開啟預訂視窗視窗…");
+      const r = await api(`/api/robot/hits/${book}/book`, { method: "POST" });
+      toast("正在幫你填到學校確認頁…");
+      location.hash = `#prep/${r.prep}`;
     } catch (err) { toast(err.message, true); }
-    refreshRobot(); refreshLogs();
+    loadPreps(); refreshRobot(); refreshLogs();
   } else if (dismiss) {
     await api(`/api/robot/hits/${dismiss}/dismiss`, { method: "POST" });
     refreshRobot();
@@ -840,34 +975,68 @@ function renderMembers() {
 $("members").onchange = async () => {
   const members = {};
   $("members").querySelectorAll("input[data-mt]").forEach((i) => (members[i.dataset.mt] = Number(i.value) || 0));
-  try { await api("/api/robot/settings", { method: "POST", body: JSON.stringify({ members }) }); robotData.members = members; renderMembersLine(); toast("已更新預訂人數"); }
+  try { await api("/api/me/members", { method: "POST", body: JSON.stringify({ members }) }); robotData.members = members; renderMembersLine(); toast("已更新預訂人數"); }
   catch (err) { toast(err.message, true); renderMembers(); }
 };
 
-function renderBookJob() {
-  const j = robotData.book_job || {};
-  const bar = $("bookBar");
-  bar.hidden = !j.running && !j.error;
-  bar.className = "book-bar" + (j.error ? " err" : "");
-  bar.textContent = j.running ? `預訂中：${j.message}`
-    : j.error ? `上一次預訂：${j.error}` : "";
-  // The booking window holds the site, so anything else that reads it would only queue up behind it.
-  const why = j.running ? "預訂視窗開著，關閉後才能使用" : "";
-  $("scanBtn").disabled = !!j.running;
-  if (!searchJob.running) $("searchBtn").disabled = $("searchForce").disabled = !!j.running;
-  if (!heatJob.running) $("heatRefresh").disabled = !!j.running;
-  [$("scanBtn"), $("searchBtn"), $("heatRefresh")].forEach((b) => (b.title = why));
+/* ---------- preparations: filled up to the school's confirmation page, waiting for the person ---------- */
+let preps = [];
+let shownPrep = null; // id from #prep/<id>, else the newest
+const FINISHED = ["done", "failed", "cancelled", "expired"];
+const activePrep = () => preps.find((p) => !FINISHED.includes(p.status));
+
+async function loadPreps() {
+  preps = await api("/api/preps");
+  renderPreps();
 }
+
+function renderPreps() {
+  const box = $("prepBox");
+  const p = preps.find((x) => x.id === shownPrep) || activePrep()
+    || preps.find((x) => Date.now() - new Date(x.created) < 30 * 60000 && x.id !== renderPreps.closed);
+  if (!p) { box.innerHTML = ""; box.dataset.key = ""; return; }
+  const left = p.expires_at ? countdown(p.expires_at).replace("倒數 ", "") : "";
+  const key = `${p.id}|${p.status}|${p.message}|${p.step}`;
+  if (box.dataset.key === key) { // only the countdown changes: don't reload the screenshot every 2 s
+    const c = box.querySelector(".count"); if (c) c.textContent = left;
+    return;
+  }
+  box.dataset.key = key;
+  const title = { filling: "準備中", ready: "請確認", submitting: "送出中", done: "完成", failed: "沒有成功", cancelled: "已取消", expired: "已逾時" }[p.status];
+  box.innerHTML = `<div class="prep ${p.status}">
+    <h3><span class="pill ${p.status === "done" ? "ok" : p.status === "ready" ? "info" : FINISHED.includes(p.status) ? "err" : "warn"}">${title}</span>
+      ${escapeHtml(p.label)}${p.quantity > 1 ? `（${p.step}/${p.quantity} 面）` : ""}
+      ${FINISHED.includes(p.status) ? `<button type="button" class="small ghost" data-prep-close="${p.id}" aria-label="關閉">✕</button>` : ""}</h3>
+    <p class="msg">${escapeHtml(p.message)}${p.status === "ready" ? `（剩 <span class="count">${left}</span>）` : ""}</p>
+    ${p.status === "ready" ? `<div class="big">
+      <button type="button" class="primary" data-prep-confirm="${p.id}">確認送出</button>
+      <button type="button" data-prep-cancel="${p.id}">取消</button></div>` : ""}
+    ${p.status === "done" ? `<div class="actions"><button type="button" class="small" data-goto-orders>到訂單分頁繳費</button></div>` : ""}
+    ${p.has_screenshot && p.status === "ready" ? `<img src="/api/preps/${p.id}/shot?k=${encodeURIComponent(p.court || "")}" alt="學校確認頁截圖">` : ""}
+  </div>`;
+}
+
+$("prepBox").addEventListener("click", guard(async (e) => {
+  const t = e.target.closest("button");
+  if (!t) return;
+  if (t.dataset.prepConfirm) {
+    t.disabled = true;
+    await api(`/api/preps/${t.dataset.prepConfirm}/confirm`, { method: "POST" });
+    toast("送出中…");
+  } else if (t.dataset.prepCancel) {
+    await api(`/api/preps/${t.dataset.prepCancel}/cancel`, { method: "POST" });
+  } else if (t.dataset.prepClose) {
+    renderPreps.closed = t.dataset.prepClose;
+    shownPrep = null;
+    if (location.hash.startsWith("#prep/")) history.replaceState(null, "", location.pathname);
+  } else if (t.dataset.gotoOrders !== undefined) {
+    showTab("orders");
+  }
+  await loadPreps();
+}));
+
 $("clearGone").onclick = guard(async () => { await api("/api/robot/hits", { method: "DELETE" }); refreshRobot(); });
 
-$("loginBtn").onclick = async () => {
-  try { await api("/api/session/login", { method: "POST" }); toast("登入中…"); }
-  catch (err) { toast(err.message, true); }
-  refreshRobot(); refreshLogs();
-};
-$("logoutBtn").onclick = guard(async () => {
-  if (!confirm("確定要清除登入狀態？之後要再按「登入網站」才能搜尋與預訂。")) return;
-  await api("/api/session", { method: "DELETE" }); refreshRobot(); refreshLogs(); });
 
 // Polled every 2 s. Filters come from the server only on first load; afterwards the local copy is
 // the one being edited, so only state, hits and settings are refreshed here.
@@ -881,13 +1050,10 @@ async function refreshRobot(first = false) {
   }
   bookDates = {};
   r.online_dates.forEach((d) => (bookDates[pyWeekday(d)] = d));
-  const justLoggedIn = !first && !robotData.has_session && r.has_session;
   robotData = r;
-  if (justLoggedIn) maybeAutoSearch("已登入");
   renderRobotState();
   renderHits();
   renderDismissed();
-  renderBookJob();
   if (first) renderMembers();
   renderMembersLine();
   if (r.state.running && !first && !searchJob.running) {
@@ -1047,7 +1213,7 @@ $("avail").addEventListener("pointerleave", () => ($("availTip").hidden = true))
 
 let bookTarget = null; // { day, h } of the slot in the booking dialog
 function openBook(day, h) {
-  if (robotData.book_job && robotData.book_job.running) { toast("已經有一筆預訂視窗開著，請先完成或關閉它", true); return; }
+  if (activePrep()) { toast("你已經有一筆預訂在進行中，請先確認或取消它", true); return; }
   const c = availCell(day, h);
   if (!c.open.length) return;
   bookTarget = { day, h };
@@ -1069,11 +1235,12 @@ $("closeBook").onclick = () => $("bookDialog").close();
 $("bookGo").onclick = guard(async () => {
   const qty = Math.round(Number($("bookQty").value)), max = Number($("bookQty").max);
   if (!(qty >= 1 && qty <= max)) { toast(`面數需介於 1 到 ${max} 面（目前可借場數）`, true); return; }
-  await api("/api/book", { method: "POST", body: JSON.stringify({
+  const r = await api("/api/book", { method: "POST", body: JSON.stringify({
     venue: $("bookVenue").value, date: bookTarget.day, hour: bookTarget.h, quantity: qty }) });
   $("bookDialog").close();
-  toast("正在開啟預訂視窗視窗…");
-  refreshRobot(); refreshLogs();
+  toast("正在幫你填到學校確認頁…");
+  location.hash = `#prep/${r.prep}`;
+  loadPreps(); refreshLogs();
 });
 $("avail").addEventListener("click", (e) => {
   const td = e.target.closest("td.bookable");
@@ -1098,8 +1265,7 @@ async function startSearch(force) {
 // On opening the panel or logging in: search the ticked venues whose data is missing or older than the
 // cache window. Fresher venues come from the cache, so reopening the page does not hit the site again.
 function maybeAutoSearch(why) {
-  const booking = robotData.book_job && robotData.book_job.running;
-  if (!robotData.has_session || searchJob.running || booking || !searchSel.length) return;
+  if (searchJob.running || activePrep() || !searchSel.length) return;
   const stale = searchSel.filter((id) => !searchResults[id] || searchResults[id].partial
     || Date.now() - new Date(searchResults[id].generated) > cacheMinutes * 60000);
   if (!stale.length) return;
@@ -1154,7 +1320,7 @@ document.querySelectorAll(".tab").forEach((t) => (t.onclick = () => showTab(t.da
 
 /* ---------- orders (常租紀錄 on the site) ---------- */
 const ORDERS_MAX_AGE_MIN = 5; // opening the tab re-reads the site at once when the list is older than this
-let orders = { data: null, running: false, error: null, page_open: false };
+let orders = { data: null, running: false, error: null };
 
 const daysUntil = (iso) => Math.round((parseDate(iso) - parseDate(ymd(new Date()))) / 86400000);
 
@@ -1168,7 +1334,6 @@ function orderRow(o) {
   } else if (o.payment_note) {
     note = `<span class="when" style="margin-left:0">${escapeHtml(o.payment_note)}</span>`;
   }
-  const busy = orders.page_open ? "disabled" : "";
   return `<div class="hit ${o.kind}">
     <span class="pill ${pill[0]}">${escapeHtml(pill[1])}</span>
     <b>${slots}</b>
@@ -1176,8 +1341,8 @@ function orderRow(o) {
     ${note}
     <span class="tag">${escapeHtml(o.order_no)}</span>
     <span class="acts" style="margin-left:auto">
-      ${o.kind === "unpaid" && o.can_pay ? `<button type="button" class="small primary" data-pay="${o.id}" ${busy}>線上付款</button>` : ""}
-      <button type="button" class="small" data-detail="${o.id}" ${busy}>詳細內容</button>
+      ${o.kind === "unpaid" && o.can_pay ? `<a class="small primary btnlink" href="${o.pay_url}" target="_blank" rel="noopener">線上付款</a>` : ""}
+      <a class="small btnlink" href="${o.detail_url}" target="_blank" rel="noopener">詳細內容</a>
     </span>
   </div>`;
 }
@@ -1229,19 +1394,11 @@ async function refreshOrders() {
 }
 
 function maybeRefreshOrders() {
-  if (!robotData.has_session || orders.running) return;
+  if (orders.running) return;
   if (!orders.data || Date.now() - new Date(orders.data.fetched) > ORDERS_MAX_AGE_MIN * 60000) refreshOrders();
 }
 
 $("ordersRefresh").onclick = refreshOrders;
-$("panel-orders").addEventListener("click", guard(async (e) => {
-  const b = e.target.closest("button[data-pay], button[data-detail]");
-  if (!b) return;
-  const pay = b.dataset.pay;
-  await api(`/api/orders/${pay || b.dataset.detail}/${pay ? "pay" : "detail"}`, { method: "POST" });
-  toast(pay ? "正在開啟付款頁面…" : "正在開啟訂單頁面…");
-  loadOrders();
-}));
 
 /* ---------- history heatmap ---------- */
 const HEAT_BINS = [[0, 0.2], [0.2, 0.4], [0.4, 0.6], [0.6, 0.8], [0.8, 1.01]];
@@ -1367,6 +1524,7 @@ async function loadHistory() {
   const r = await api("/api/history");
   heatStats = r.stats; heatJob = r.job;
   const btn = $("heatRefresh");
+  btn.hidden = !r.can_update;
   btn.disabled = heatJob.running;
   btn.textContent = heatJob.running ? `更新中 ${heatJob.done}/${heatJob.total || "?"} 面…` : "更新歷史資料";
 }
@@ -1386,24 +1544,50 @@ function initHeatControls() {
   $("heatSince").max = ymd(new Date());
 }
 
+/* ---------- links from Discord: #prep/<id>, #hit/<id>, #orders ---------- */
+function followHash() {
+  const [kind, id] = location.hash.replace(/^#/, "").split("/");
+  if (kind === "prep" && id) { shownPrep = id; loadPreps(); window.scrollTo(0, 0); }
+  else if (kind === "hit" && id) {
+    showTab("filter");
+    setTimeout(() => { const el = $(`hit-${id}`); if (el) { el.scrollIntoView({ block: "center" }); el.classList.add("flash"); } }, 300);
+  } else if (kind === "orders") showTab("orders");
+}
+window.addEventListener("hashchange", followHash);
+
 /* ---------- init ---------- */
-(async function init() {
-  venues = await api("/api/venues");
-  const [cred] = await Promise.all([loadCred(), refreshLogs(), loadHistory(), loadSearch()]);
-  await refreshRobot(true);
-  initHeatControls();
-  initSearchControls();
-  if (searchJob.running) pollSearch(); else maybeAutoSearch("開啟控制台");
+let started = false;
+async function start() {
+  try { await loadMe(); } catch (err) { if (!(err instanceof LoggedOut)) toast(err.message, true); return; }
+  $("loginScreen").hidden = true;
+  $("app").hidden = false;
+  if (!started) {
+    venues = await api("/api/venues");
+    await Promise.all([refreshLogs(), loadHistory(), loadSearch(), loadPreps()]);
+    await refreshRobot(true);
+    initHeatControls();
+    initSearchControls();
+    started = true;
+  } else {
+    await Promise.all([refreshLogs(), loadPreps(), refreshRobot()]);
+  }
+  if (searchJob.running) pollSearch(); else maybeAutoSearch("開啟網頁");
   let tab = "search";
   try { tab = localStorage.getItem("tab") || "search"; } catch (e) {}
   showTab(tab);
   if (heatJob.running) pollHistory();
   await loadOrders(); // the server reads them in the background; this shows the latest it has
-  if (!cred.has_password) openSettings(); // first run: the account is needed before anything else works
-  setInterval(refreshLogs, 3000);
-  setInterval(refreshRobot, 2000);
-  setInterval(loadOrders, 5000); // picks up the server's background reads
-})();
+  followHash();
+  const quiet = (fn) => () => fn().catch(() => {});
+  timers = [
+    setInterval(quiet(refreshLogs), 4000),
+    setInterval(quiet(refreshRobot), 3000),
+    setInterval(quiet(loadPreps), 2000),
+    setInterval(quiet(loadOrders), 10000),
+    setInterval(quiet(loadMe), 15000),
+  ];
+}
+start();
 </script>
 </body>
 </html>
