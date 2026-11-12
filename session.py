@@ -203,10 +203,12 @@ class Account:
         data = json.loads(self.session_file.read_text(encoding="utf-8"))
         return data["user_agent"], [c for c in data["cookies"] if _domain_matches(c["domain"])]
 
-    def fetch(self, path: str, form: str | None = None) -> str:
+    def fetch(self, path: str, form: str | None = None, referer: str | None = None) -> str:
         """GET (or POST `form`, an urlencoded body) with the saved cookies. Raises NotLoggedIn when expired."""
         ua, cookies = self.saved()
         headers = {"User-Agent": ua, "Cookie": "; ".join(f"{c['name']}={c['value']}" for c in cookies)}
+        if referer:
+            headers["Referer"] = referer
         if form is not None:
             headers.update({
                 "Content-Type": "application/x-www-form-urlencoded",

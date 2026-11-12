@@ -48,6 +48,7 @@ def parse_orders(page: str) -> list[dict]:
             "payment_note": payment_note,
             "deadline": deadline.group(0) if deadline else None,
             "can_pay": "線上付款" in row,
+            "can_cancel": "CancelOrderFun" in row,  # the row's 「取消訂單」 button
         })
     return orders
 
@@ -86,6 +87,30 @@ def fetch_orders(acct: session.Account) -> dict:
 def load_saved(acct: session.Account) -> dict | None:
     f = _file(acct)
     return json.loads(f.read_text(encoding="utf-8")) if f.exists() else None
+
+
+def cancel_order(acct: session.Account, order_id: str) -> tuple[bool | None, dict]:
+    """Cancel one order the way the site's 「取消訂單」 button does after its 「您確定取消訂單嗎？」 prompt:
+    open /order/?Cancel=O:<id>&S=rental. Then read the list again; returns (cancelled, fresh list), where
+    cancelled is None when the order is no longer listed (can't tell). Raises session.NotLoggedIn."""
+    if not order_id.isdigit():
+        raise ValueError("bad order id")
+    # /order/ keeps state in the server-side session (the chosen venue), so don't run under a venue walk
+    # of the same account: let a walk stop at its next court, as a booking does.
+    acct.booking_waiting.set()
+    try:
+        acct.site_lock.acquire()
+    finally:
+        acct.booking_waiting.clear()
+    try:
+        page = acct.fetch(f"/order/?Cancel=O:{order_id}&S=rental", referer=session.BASE + ORDERS_PATH)
+        session.SNAPSHOT_DIR.mkdir(parents=True, exist_ok=True)
+        (session.SNAPSHOT_DIR / f"_cancel_{acct.name}.html").write_text(page, encoding="utf-8")
+    finally:
+        acct.site_lock.release()
+    data = fetch_orders(acct)
+    order = next((o for o in data["orders"] if o["id"] == order_id), None)
+    return (order["kind"] == "cancelled" if order else None), data
 
 
 def pay_path(order_id: str) -> str:

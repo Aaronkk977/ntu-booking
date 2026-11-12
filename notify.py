@@ -45,13 +45,15 @@ class NotConfigured(Exception):
     pass
 
 
-def _call(method: str, path: str, body=None) -> dict:
+def _call(method: str, path: str, body=None, auth: bool = True) -> dict:
     token = config.load()["discord_token"]
-    if not token:
+    if auth and not token:
         raise NotConfigured("伺服器還沒設定 Discord bot")
+    headers = {"Content-Type": "application/json", "User-Agent": USER_AGENT}
+    if auth:
+        headers["Authorization"] = f"Bot {token}"
     req = urllib.request.Request(
-        API + path, method=method, data=json.dumps(body).encode() if body is not None else None,
-        headers={"Authorization": f"Bot {token}", "Content-Type": "application/json", "User-Agent": USER_AGENT})
+        API + path, method=method, data=json.dumps(body).encode() if body is not None else None, headers=headers)
     try:
         with urllib.request.urlopen(req, timeout=15) as res:
             raw = res.read()
@@ -96,6 +98,13 @@ def verify(signature: str, timestamp: str, body: bytes) -> bool:
         return True
     except (InvalidSignature, ValueError, KeyError, OSError, NotConfigured):
         return False
+
+
+def edit_original(app_id: str, interaction_token: str, text: str) -> None:
+    """Replace the message an interaction answered with type 7 (e.g. 「正在取消…」) with the outcome.
+    The interaction token (valid 15 minutes) is the credential here, not the bot token."""
+    _call("PATCH", f"/webhooks/{app_id}/{interaction_token}/messages/@original",
+          {"content": text[:1900], "components": [], "allowed_mentions": {"parse": []}}, auth=False)
 
 
 def setup_interactions(public_url: str, tries: int = 6) -> str:

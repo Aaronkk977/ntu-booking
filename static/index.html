@@ -1428,9 +1428,29 @@ function orderRow(o) {
     <span class="acts" style="margin-left:auto">
       ${o.kind === "unpaid" && o.can_pay ? `<a class="small primary btnlink" href="${o.pay_url}" target="_blank" rel="noopener">線上付款</a>` : ""}
       <a class="small btnlink" href="${o.detail_url}" target="_blank" rel="noopener">詳細內容</a>
+      ${o.kind !== "cancelled" && o.can_cancel !== false && o.slots.some((t) => t.date >= ymd(new Date()))
+        ? `<button type="button" class="small danger" data-cancel-order="${o.id}">取消訂單</button>` : ""}
     </span>
   </div>`;
 }
+
+$("panel-orders").addEventListener("click", guard(async (e) => {
+  const b = e.target.closest("button[data-cancel-order]");
+  if (!b) return;
+  const o = ((orders.data && orders.data.orders) || []).find((x) => x.id === b.dataset.cancelOrder);
+  if (!o) return;
+  const what = `${o.venue} ${o.slots.map((t) => `${fmtDate(t.date)} ${t.start}`).join("、")}`;
+  const paid = o.kind === "paid" ? "\n這筆已經繳費，退費依學校規定處理。" : "";
+  if (!confirm(`確定要取消 ${what}？取消後不能復原。${paid}`)) return;
+  b.disabled = true;
+  b.textContent = "取消中…";
+  try {
+    const r = await api(`/api/orders/${o.id}/cancel`, { method: "POST" });
+    toast(r.message);
+  } finally {
+    await loadOrders();
+  }
+}));
 
 function renderOrders() {
   const list = (orders.data && orders.data.orders) || [];

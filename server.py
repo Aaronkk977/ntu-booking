@@ -215,20 +215,84 @@ def start_orders(acct: session.Account) -> bool:
     return True
 
 
+REMIND_DAY_OF_HOUR = 8  # the deadline-day reminder waits until morning
+
+
+def order_label(o: dict) -> str:
+    when = "、".join(f"{day_label(s['date'])} {s['start']}–{s['end']}" for s in o["slots"]) or "—"
+    return f"{o['venue']} {when}"
+
+
 def _deadline_reminders(acct: session.Account, data: dict) -> None:
-    """DM once per order when its payment deadline is a day or less away."""
+    """Unpaid orders: DM the day before the payment deadline and again on the day (from 08:00), each with
+    「線上付款」 and 「取消訂單」, so every order ends up paid or cancelled rather than lapsing."""
     cfg = robot.load_config(acct)
-    told = set(cfg.get("deadline_told", []))
-    soon = date.today() + timedelta(days=1)
-    new = [o for o in data["orders"] if o["kind"] == "unpaid" and o["deadline"] and o["id"] not in told
-           and date.fromisoformat(o["deadline"][:10]) <= soon and any(s["date"] >= date.today().isoformat() for s in o["slots"])]
-    for o in new:
-        when = "、".join(f"{day_label(s['date'])} {s['start']}" for s in o["slots"])
-        notify.send(_discord_id(acct), f"⏰ 繳費期限快到了：{o['venue']} {when}，截止 {day_label(o['deadline'])}，金額 {o['amount']}",
-                    ("打開訂單", notify.url("#orders")))
-    if new:
-        cfg["deadline_told"] = sorted(told | {o["id"] for o in new})[-50:]
+    told = set(cfg.get("deadline_told", []))  # "<order id>:d1" / ":d0"; a bare id is a d1 from before
+    today, now = date.today(), datetime.now()
+    sent = []
+    for o in data["orders"]:
+        if o["kind"] != "unpaid" or not o["deadline"] or not any(s["date"] >= today.isoformat() for s in o["slots"]):
+            continue
+        deadline = date.fromisoformat(o["deadline"][:10])
+        if deadline == today + timedelta(days=1):
+            stage, when = "d1", "明天"
+        elif deadline == today and now.hour >= REMIND_DAY_OF_HOUR:
+            stage, when = "d0", "今天"
+        else:
+            continue
+        if f"{o['id']}:{stage}" in told or (stage == "d1" and o["id"] in told):
+            continue
+        buttons = []
+        if o.get("can_pay", True):
+            buttons.append(notify.link_button("線上付款", session.BASE + orders.pay_path(o["id"])))
+        if o.get("can_cancel", True):
+            buttons.append(notify.button("取消訂單", f"order:cancel:{o['id']}", 4))
+        notify.send(_discord_id(acct), f"⏰ {when}是繳費期限：{order_label(o)}，金額 {o['amount']}\n"
+                                      "要去就繳費；不去的話請取消，別讓它逾期。",
+                    ("打開訂單", notify.url("#orders")), buttons=buttons)
+        sent.append(f"{o['id']}:{stage}")
+    if sent:
+        cfg["deadline_told"] = (sorted(told) + sent)[-100:]
         robot.save_config(acct, cfg)
+
+
+def cancel_for(acct: session.Account, order_id: str) -> tuple[bool | None, str]:
+    """Cancel one of acct's orders on the school site and check the result. (ok, message for the person);
+    ok is None when it can't be told whether the cancel went through."""
+    st = orders_state(acct)
+    o = next((x for x in ((st["data"] or {}).get("orders") or []) if x["id"] == order_id), None)
+    if o is None:
+        return False, "找不到這筆訂單，請重新整理訂單"
+    label = order_label(o)
+    if o["kind"] == "cancelled":
+        return True, f"這筆已經是取消狀態：{label}"
+    if not o.get("can_cancel", True):
+        return False, f"學校網站沒有提供這筆的取消功能，請到學校網站處理：{label}"
+    try:
+        cancelled, data = acct.with_relogin(lambda: orders.cancel_order(acct, order_id))
+    except session.NotLoggedIn as e:
+        return False, f"沒有取消：{acct.login_error or e}"
+    except Exception as e:  # offline, page changed, ...
+        log("error", f"取消訂單失敗：{_err(e)}", acct.name)
+        return None, f"取消時發生錯誤（{_err(e)}），請到學校網站確認這筆的狀態：{label}"
+    st.update(data=data, error=None)
+    if cancelled:
+        log("info", f"已取消訂單：{label}", acct.name)
+        return True, f"已取消：{label}"
+    if cancelled is None:
+        log("warn", f"取消後訂單列表裡找不到這筆：{label}", acct.name)
+        return None, f"送出取消後，訂單列表裡找不到這筆了，請到學校網站確認：{label}"
+    log("warn", f"取消沒有生效：{label}", acct.name)
+    return False, f"學校網站沒有把這筆改成已取消，請到學校網站自己取消：{label}"
+
+
+def _cancel_and_report(acct: session.Account, order_id: str, app_id: str, token: str) -> None:
+    ok, msg = cancel_for(acct, order_id)
+    try:
+        notify.edit_original(app_id, token, ("✅ " if ok else "⚠️ ") + msg)
+    except Exception as e:
+        log("warn", f"Discord 回覆取消結果失敗：{_err(e)}", acct.name)
+        notify.send(_discord_id(acct), ("✅ " if ok else "⚠️ ") + msg)
 
 
 def _orders_loop() -> None:
@@ -405,6 +469,28 @@ def handle_interaction(data: dict) -> dict:
         return _reply("不認得這個指令。")
     if kind == 3:  # a button
         parts = str((data.get("data") or {}).get("custom_id", "")).split(":")
+        if len(parts) == 3 and parts[0] == "order":
+            _, action, order_id = parts
+            acct = _account_by_discord(discord_id)
+            o = next((x for x in ((orders_state(acct)["data"] or {}).get("orders") or []) if x["id"] == order_id),
+                     None) if acct else None
+            if not o:
+                return _reply("找不到這筆訂單（只能取消自己的訂單）。")
+            if action == "keep":
+                return {"type": 7, "data": {"content": "好，沒有取消。", "components": []}}
+            if o["kind"] == "cancelled":
+                return _reply(f"這筆已經是取消狀態：{order_label(o)}")
+            if action == "cancel":  # ask once more, privately
+                paid = "\n這筆已經繳費，退費依學校規定處理。" if o["kind"] == "paid" else ""
+                return _reply(f"確定要取消 {order_label(o)}？取消後不能復原。{paid}",
+                              [notify.button("確定取消", f"order:cancelyes:{order_id}", 4),
+                               notify.button("不要取消", f"order:keep:{order_id}", 2)])
+            if action == "cancelyes":
+                # Cancelling takes a few seconds and Discord wants an answer within 3: answer now, report later.
+                threading.Thread(target=_cancel_and_report, daemon=True,
+                                 args=(acct, order_id, str(data.get("application_id")), str(data.get("token")))).start()
+                log("info", f"在 Discord 按了取消訂單：{order_label(o)}", acct.name)
+                return {"type": 7, "data": {"content": f"正在取消 {order_label(o)}…", "components": []}}
         if len(parts) == 3 and parts[0] == "prep":
             _, decision, prep_id = parts
             prep = booker.get(prep_id)
@@ -941,6 +1027,13 @@ class Handler(BaseHTTPRequestHandler):
         if path == "/api/orders/refresh":
             start_orders(acct)
             return self._json({"ok": True})
+        if path.startswith("/api/orders/") and path.endswith("/cancel"):
+            if not acct.school:
+                return self._error(400, "連結計中帳號後才能在這裡取消訂單")
+            ok, msg = cancel_for(acct, path.split("/")[3])
+            if ok:
+                return self._json({"ok": True, "message": msg})
+            return self._error(502 if ok is None else 400, msg)
         if path == "/api/admin/block" and admin:  # turn a Discord-login account away
             name = str(body.get("account", ""))
             if not config.is_discord_account(name):
