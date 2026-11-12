@@ -325,7 +325,7 @@ def _on_prep_change(prep: booker.Prep) -> None:
         for oid in prep.order_ids[-2:]:
             buttons += [notify.link_button("線上付款", session.BASE + orders.pay_path(oid)),
                         notify.button("取消訂單", f"order:cancel:{oid}", 4)]
-        head = "🤖 自動訂到了" if prep.auto else "✅"
+        head = "🤖 自動訂到了" if prep.auto and not prep.by_tap else "✅"
         notify.send(did, f"{head} {prep.label}\n{prep.message}", ("打開訂單", notify.url("#orders")), buttons=buttons)
         start_orders(acct)
     elif prep.status == "expired" and not booker.slot_passed(prep):
@@ -342,10 +342,10 @@ def _on_prep_change(prep: booker.Prep) -> None:
 
 
 def start_prep(acct: session.Account, venue: str, day: str, hour: int, quantity: int,
-               auto: bool = False) -> booker.Prep:
+               auto: bool = False, by_tap: bool = False) -> booker.Prep:
     members = robot.load_config(acct).get("members", robot.DEFAULT_MEMBERS)
     return booker.prepare(acct, venue, slot_label(venue, day, hour), day, hour, quantity, members, _on_prep_change,
-                          auto=auto)
+                          auto=auto, by_tap=by_tap)
 
 
 AUTO_DAILY_LIMIT = 3  # courts a day the robot may book without asking, per person
@@ -354,7 +354,7 @@ _auto_lock = threading.Lock()
 
 def _record_auto(prep: booker.Prep) -> None:
     """Count the courts an auto prep booked against the day's limit (once, when it finishes)."""
-    if not prep.auto or getattr(prep, "_counted", False):
+    if not prep.auto or prep.by_tap or getattr(prep, "_counted", False):
         return
     prep._counted = True
     if prep.booked:
@@ -373,7 +373,8 @@ def auto_left(acct: session.Account) -> int:
     done = sum(e["courts"] for e in robot.load_config(acct).get("auto_booked", []) if e["date"] == today)
     # auto preps not yet written to the log: a running one may still book all it asked for
     running = sum(len(p.booked) if p.finished else p.quantity for p in booker.for_account(acct)
-                  if p.auto and not getattr(p, "_counted", False) and p.created.date().isoformat() == today)
+                  if p.auto and not p.by_tap and not getattr(p, "_counted", False)
+                  and p.created.date().isoformat() == today)
     return max(0, AUTO_DAILY_LIMIT - done - running)
 
 
@@ -584,9 +585,11 @@ def handle_interaction(data: dict) -> dict:
             if not can_book(acct):
                 return _reply("伺服器沒辦法幫你訂：要先在網站「設定」連結計中帳號（或重新登入）。也可以直接到學校網站訂。",
                               [notify.link_button("到學校網站預訂", school_url(hit["venue"]))])
-            start_prep(acct, hit["venue"], hit["date"], hit["hour"], robot.clamp_want(hit.get("want"), hit.get("count", 1)))
+            # Pressing 預訂 is the go-ahead: book it straight away (the daily limit is only for the robot).
+            quantity = robot.clamp_want(hit.get("want"), hit.get("count", 1))
+            start_prep(acct, hit["venue"], hit["date"], hit["hour"], quantity, auto=True, by_tap=True)
             log("info", f"在 Discord 按了預訂：{label}", acct.name)
-            return _reply(f"正在幫你把 {label} 填到學校確認頁，填好會私訊你按「確認送出」。")
+            return _reply(f"正在幫你訂 {label}（{quantity} 面），訂好會私訊你繳費和取消的按鈕。")
         if len(parts) == 3 and parts[0] == "prep":
             _, decision, prep_id = parts
             prep = booker.get(prep_id)

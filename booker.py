@@ -153,7 +153,7 @@ def _booked(acct: session.Account, day: str, hour: int, before: set[str]) -> str
 class Prep:
     """One booking request of one person: its state is read by the web app and the notifier."""
 
-    def __init__(self, acct, venue, label, day, hour, quantity, members, auto=False):
+    def __init__(self, acct, venue, label, day, hour, quantity, members, auto=False, by_tap=False):
         self.id = uuid.uuid4().hex[:12]
         self.acct, self.venue, self.label, self.day, self.hour = acct, venue, label, day, hour
         self.quantity, self.members = quantity, members
@@ -166,6 +166,7 @@ class Prep:
         self.booked: list[str] = []
         self.step = 1
         self.auto = auto  # the person's filter says: send without asking (robot, within the daily limit)
+        self.by_tap = by_tap  # auto because the person pressed 預訂 (not the robot: no daily limit)
         self.order_ids: list[str] = []  # the orders this prep created
         self.preconfirmed_step = 0  # confirmed after the page expired: re-fill this step and send it at once
         self.created = datetime.now()
@@ -209,10 +210,11 @@ def busy(acct: session.Account) -> Prep | None:
 
 
 def prepare(acct: session.Account, venue: str, label: str, day: str, hour: int, quantity: int,
-            members: dict[str, int], on_change=lambda prep: None, auto: bool = False) -> Prep:
+            members: dict[str, int], on_change=lambda prep: None, auto: bool = False,
+            by_tap: bool = False) -> Prep:
     """Start filling in the background. `on_change(prep)` is called whenever its status changes. With
     `auto`, each filled confirmation page is sent at once instead of waiting for 確認送出."""
-    prep = Prep(acct, venue, label, day, hour, quantity, members, auto)
+    prep = Prep(acct, venue, label, day, hour, quantity, members, auto, by_tap)
     prep.on_change = on_change
     with _preps_lock:
         _preps[prep.id] = prep
