@@ -9,7 +9,9 @@ PYTHON_VERSION=3.12
 BIN="$HOME/.local/bin"
 export PATH="$BIN:$PATH"
 mkdir -p "$BIN"
-[ -f deploy/env ] && . deploy/env  # may set PLAYWRIGHT_BROWSERS_PATH
+# deploy/env may set PLAYWRIGHT_BROWSERS_PATH; export it so Playwright sees it
+if [ -f deploy/env ]; then set -a; . deploy/env; set +a; fi
+[ -n "${PLAYWRIGHT_BROWSERS_PATH:-}" ] || unset PLAYWRIGHT_BROWSERS_PATH
 
 if ! command -v uv >/dev/null; then
   echo "== Installing uv into $BIN"
