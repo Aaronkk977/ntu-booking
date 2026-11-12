@@ -14,6 +14,7 @@ import json
 import os
 import secrets
 import shutil
+import signal
 import sys
 import threading
 import time
@@ -1005,10 +1006,29 @@ def main() -> None:
     ROBOT.reschedule()  # start scanning right away if any filter is enabled
     for name in config.users():  # a login saved hours ago has probably expired; find out now
         threading.Thread(target=session.account(name).check, daemon=True).start()
+
+    def stop(signum, _frame):
+        _tell_pending_on_shutdown()
+        raise SystemExit(0)
+
+    signal.signal(signal.SIGTERM, stop)  # deploy/run.sh --stop, a restart, the machine shutting down
     try:
         server.serve_forever()
     except KeyboardInterrupt:
-        pass
+        _tell_pending_on_shutdown()
+
+
+def _tell_pending_on_shutdown() -> None:
+    """Bookings live in memory: say so before they are lost, instead of leaving dead buttons in Discord."""
+    for prep in list(booker._preps.values()):
+        if prep.finished or prep.status == "submitting":
+            continue
+        msg = f"⚠️ {prep.label}\n伺服器重新啟動，這筆預訂中斷了，沒有送出。空位還在的話請重新準備，或到學校網站自己訂。"
+        log("warn", "伺服器停止，中斷了一筆還沒送出的預訂", prep.acct.name)
+        try:
+            notify.send_now(_discord_id(prep.acct), msg, buttons=[notify.link_button("到學校網站預訂", school_url(prep.venue))])
+        except Exception:
+            pass
 
 
 if __name__ == "__main__":

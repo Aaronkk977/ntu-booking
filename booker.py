@@ -115,8 +115,13 @@ def _fill_one(page, venue: str, day: str, hour: int, preferred: list[str], exclu
 
 
 def _final_button(page):
-    """The confirmation page's one button that sends the order: a submit-like control whose text says
-    confirm/send and nothing like cancel/back. None unless exactly one fits."""
+    """The confirmation page's one button that sends the order. On the site (Step=3 of RentForm) that is
+    <button name="Send" title="下一步 完成租借">; the only other button is 「編輯」. If the page ever changes,
+    fall back to the one submit-like control whose text says confirm/send and nothing like cancel/back.
+    None unless exactly one fits."""
+    send = page.locator('form#RentForm button[name="Send"]')
+    if send.count() == 1 and "完成" in ((send.inner_text() or "") + (send.get_attribute("title") or "")):
+        return send, send.inner_text().strip()
     found = []
     for el in page.locator('button, input[type="submit"], input[type="button"], a.Button, a.btn').all():
         try:
