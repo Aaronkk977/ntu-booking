@@ -386,9 +386,13 @@
       <div class="toolbar">
         <div class="group"><span class="label">名稱</span><input id="fName" type="text" class="compact" maxlength="30"></div>
         <label class="switch"><input type="checkbox" id="watchEnabled"><span class="track"></span><span id="watchLabel">已停用</span></label>
-        <label class="switch" title="找到空位時，伺服器先填到學校確認頁，你只要按確認送出"><input type="checkbox" id="watchAuto"><span class="track"></span><span>找到就先準備</span></label>
+        <div class="group"><span class="label">找到時</span><select id="watchMode" class="compact">
+          <option value="notify">只通知（附預訂按鈕）</option>
+          <option value="prepare">先填好，我按確認送出</option>
+          <option value="auto">直接送出</option></select></div>
         <button type="button" class="small danger" id="fDelete">刪除濾網</button>
       </div>
+      <p class="hint" id="watchModeHint"></p>
       <div class="toolbar">
         <div class="group"><span class="label">場地</span><span id="watchVenues" class="group"></span></div>
         <div class="group"><span class="label">快速選取</span>
@@ -741,7 +745,7 @@ $("clearLogView").onclick = () => { logCutoff = refreshLogs.total || 0; refreshL
 /* ---------- robot: filters (weekly timetables) + auto hit list ---------- */
 const DAY_LABELS = ["週一", "週二", "週三", "週四", "週五", "週六", "週日"]; // index = Python weekday
 let HOURS = []; // every start hour any venue's timetable has, from the server
-const EMPTY_FILTER = { id: null, name: "", enabled: false, venues: [], slots: {}, auto_prepare: true };
+const EMPTY_FILTER = { id: null, name: "", enabled: false, venues: [], slots: {}, mode: "prepare" };
 let robotData = { state: {}, filters: [], hits: [] };
 let watch = EMPTY_FILTER; // the filter being edited (heatmap clicks also edit this one)
 let bookDates = {}; // weekday -> ISO date currently inside the online booking window
@@ -819,7 +823,8 @@ function renderFilterEditor() {
       <span>${v.name}・${v.sport}</span></label>`).join("");
   $("watchEnabled").checked = watch.enabled;
   $("watchLabel").textContent = watch.enabled ? "啟用中" : "已停用";
-  $("watchAuto").checked = watch.auto_prepare !== false;
+  $("watchMode").value = watch.mode || (watch.auto_prepare === false ? "notify" : "prepare");
+  renderModeHint();
   renderWeek();
 }
 
@@ -942,7 +947,24 @@ $("watchVenues").onchange = () => {
   renderWeek(); saveWatch();
 };
 $("fName").oninput = () => { watch.name = $("fName").value; saveWatch(); };
-$("watchAuto").onchange = () => { watch.auto_prepare = $("watchAuto").checked; saveWatch(); };
+function renderModeHint() {
+  const mode = $("watchMode").value, d = robotData;
+  $("watchModeHint").textContent = {
+    notify: "找到空位只私訊通知；按訊息裡的「預訂」才開始幫你填。",
+    prepare: "找到空位就先填到學校確認頁，你在 Discord 按「確認送出」才會送出。",
+    auto: `找到空位就直接送出訂單，不再問你；每天最多 ${d.auto_limit ?? 3} 面（今天還剩 ${d.auto_left ?? "?"} 面），超過就改成要你確認。訂到後記得繳費，不要的話用訊息裡的「取消訂單」。`,
+  }[mode];
+}
+$("watchMode").onchange = () => {
+  const mode = $("watchMode").value;
+  if (mode === "auto" && !confirm("找到空位就直接送出訂單、不再問你，訂到就要繳費或取消。確定要開？")) {
+    $("watchMode").value = watch.mode || (watch.auto_prepare === false ? "notify" : "prepare");
+    return;
+  }
+  watch.mode = mode;
+  renderModeHint();
+  saveWatch();
+};
 $("watchEnabled").onchange = () => {
   if ($("watchEnabled").checked) {
     if (!Object.keys(watch.slots).length) { toast("請先在時間表選取時段", true); $("watchEnabled").checked = false; return; }
@@ -959,7 +981,7 @@ $("filterTabs").onclick = async (e) => {
   if (tab.id === "fAdd") {
     try {
       const f = await api("/api/robot/filters", { method: "POST", body: JSON.stringify({
-        name: `濾網 ${robotData.filters.length + 1}`, enabled: false, venues: [searchSel[0] || venues[0].id], slots: {}, auto_prepare: true,
+        name: `濾網 ${robotData.filters.length + 1}`, enabled: false, venues: [searchSel[0] || venues[0].id], slots: {}, mode: "prepare",
       }) });
       robotData.filters.push(f);
       selectFilter(f.id);

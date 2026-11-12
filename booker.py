@@ -136,16 +136,16 @@ def _final_button(page):
     return found[0] if len(found) == 1 else None
 
 
-def _booked(acct: session.Account, day: str, hour: int, before: set[str]) -> bool:
-    """True when the order list now has a new, not cancelled order for this slot."""
+def _booked(acct: session.Account, day: str, hour: int, before: set[str]) -> str | None:
+    """The id of a new, not cancelled order for this slot in the order list, or None."""
     data = orders.fetch_orders(acct)
     start = f"{hour:02d}:00"
     for o in data["orders"]:
         if o["id"] in before or o["kind"] == "cancelled":
             continue
         if any(s["date"] == day and s["start"].startswith(start) for s in o["slots"]):
-            return True
-    return False
+            return o["id"]
+    return None
 
 
 # ---------- preparations ----------
@@ -153,7 +153,7 @@ def _booked(acct: session.Account, day: str, hour: int, before: set[str]) -> boo
 class Prep:
     """One booking request of one person: its state is read by the web app and the notifier."""
 
-    def __init__(self, acct, venue, label, day, hour, quantity, members):
+    def __init__(self, acct, venue, label, day, hour, quantity, members, auto=False):
         self.id = uuid.uuid4().hex[:12]
         self.acct, self.venue, self.label, self.day, self.hour = acct, venue, label, day, hour
         self.quantity, self.members = quantity, members
@@ -165,6 +165,8 @@ class Prep:
         self.expires_at: datetime | None = None
         self.booked: list[str] = []
         self.step = 1
+        self.auto = auto  # the person's filter says: send without asking (robot, within the daily limit)
+        self.order_ids: list[str] = []  # the orders this prep created
         self.preconfirmed_step = 0  # confirmed after the page expired: re-fill this step and send it at once
         self.created = datetime.now()
         self._decisions: queue.Queue = queue.Queue()
@@ -175,7 +177,7 @@ class Prep:
             "id": self.id, "venue": self.venue, "label": self.label, "date": self.day, "hour": self.hour,
             "quantity": self.quantity, "step": self.step, "status": self.status, "message": self.message,
             "court": self.court, "amount": self.amount, "booked": self.booked,
-            "has_screenshot": self.screenshot is not None,
+            "has_screenshot": self.screenshot is not None, "auto": self.auto,
             "expires_at": self.expires_at.isoformat(timespec="seconds") if self.expires_at else None,
             "created": self.created.isoformat(timespec="seconds"),
         }
@@ -207,9 +209,10 @@ def busy(acct: session.Account) -> Prep | None:
 
 
 def prepare(acct: session.Account, venue: str, label: str, day: str, hour: int, quantity: int,
-            members: dict[str, int], on_change=lambda prep: None) -> Prep:
-    """Start filling in the background. `on_change(prep)` is called whenever its status changes."""
-    prep = Prep(acct, venue, label, day, hour, quantity, members)
+            members: dict[str, int], on_change=lambda prep: None, auto: bool = False) -> Prep:
+    """Start filling in the background. `on_change(prep)` is called whenever its status changes. With
+    `auto`, each filled confirmation page is sent at once instead of waiting for 確認送出."""
+    prep = Prep(acct, venue, label, day, hour, quantity, members, auto)
     prep.on_change = on_change
     with _preps_lock:
         _preps[prep.id] = prep
@@ -326,7 +329,7 @@ def _book(prep: Prep, set_) -> None:
                 _save_page(page, f"_confirm_{acct.name}", "the school's confirmation page")
                 prep.screenshot = page.screenshot(full_page=True, type="jpeg", quality=70)
                 cost = f"，金額 ${prep.amount}" if prep.amount else ""
-                if prep.preconfirmed_step == k:  # already confirmed by a tap after the first page expired
+                if prep.auto or prep.preconfirmed_step == k:  # auto-send, or confirmed after the page expired
                     decision = "confirm"
                 else:
                     prep.expires_at = datetime.now() + timedelta(seconds=HOLD_S)
@@ -342,7 +345,7 @@ def _book(prep: Prep, set_) -> None:
                          f"{tag}{HOLD_S // 60} 分鐘內沒按，確認頁先關掉了，還沒送出。之後還想要的話照樣按「確認送出」，"
                          "會重新填一次並直接送出（場還在的話）")
                     return
-                set_("submitting", f"{tag}送出中…")
+                set_("submitting", f"{tag}{'自動' if prep.auto else ''}送出中…")
                 _confirm(page, prep)
                 prep.booked.append(prep.court)
                 page.close()
@@ -369,5 +372,7 @@ def _confirm(page, prep: Prep) -> None:
         page.wait_for_timeout(3000)
     _save_page(page, f"_confirm_result_{acct.name}", "after pressing the final button")
     time.sleep(1)
-    if not _booked(acct, prep.day, prep.hour, before):
+    order_id = _booked(acct, prep.day, prep.hour, before)
+    if not order_id:
         raise Stuck("按了送出，但訂單列表裡找不到這筆，請到學校網站確認")
+    prep.order_ids.append(order_id)

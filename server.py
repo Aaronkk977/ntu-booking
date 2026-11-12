@@ -317,13 +317,23 @@ def _on_prep_change(prep: booker.Prep) -> None:
                     buttons=[notify.button("確認送出", f"prep:confirm:{prep.id}", 3),
                              notify.button("取消", f"prep:cancel:{prep.id}", 4)])
     elif prep.status == "done":
-        notify.send(did, f"✅ {prep.label}\n{prep.message}", ("打開訂單", notify.url("#orders")))
+        _record_auto(prep)
+        saved = orders.load_saved(acct)  # just read by the booking: lets the cancel button find the order
+        if saved:
+            orders_state(acct).update(data=saved, error=None)
+        buttons = []
+        for oid in prep.order_ids[-2:]:
+            buttons += [notify.link_button("線上付款", session.BASE + orders.pay_path(oid)),
+                        notify.button("取消訂單", f"order:cancel:{oid}", 4)]
+        head = "🤖 自動訂到了" if prep.auto else "✅"
+        notify.send(did, f"{head} {prep.label}\n{prep.message}", ("打開訂單", notify.url("#orders")), buttons=buttons)
         start_orders(acct)
     elif prep.status == "expired" and not booker.slot_passed(prep):
         notify.send(did, f"⏸️ {prep.label}\n{prep.message}", ("打開預訂", notify.url(f"#prep/{prep.id}")),
                     buttons=[notify.button("確認送出", f"prep:confirm:{prep.id}", 3),
                              notify.button("不要了", f"prep:cancel:{prep.id}", 4)])
     elif prep.status in ("failed", "expired"):
+        _record_auto(prep)
         notify.send(did, f"⚠️ {prep.label}\n{prep.message}")
         if prep.status == "failed" and "沒有可訂" in prep.message:
             robot.mark_gone(acct, prep.venue, prep.day, prep.hour)
@@ -331,28 +341,76 @@ def _on_prep_change(prep: booker.Prep) -> None:
             start_orders(acct)
 
 
-def start_prep(acct: session.Account, venue: str, day: str, hour: int, quantity: int) -> booker.Prep:
+def start_prep(acct: session.Account, venue: str, day: str, hour: int, quantity: int,
+               auto: bool = False) -> booker.Prep:
     members = robot.load_config(acct).get("members", robot.DEFAULT_MEMBERS)
-    return booker.prepare(acct, venue, slot_label(venue, day, hour), day, hour, quantity, members, _on_prep_change)
+    return booker.prepare(acct, venue, slot_label(venue, day, hour), day, hour, quantity, members, _on_prep_change,
+                          auto=auto)
+
+
+AUTO_DAILY_LIMIT = 3  # courts a day the robot may book without asking, per person
+_auto_lock = threading.Lock()
+
+
+def _record_auto(prep: booker.Prep) -> None:
+    """Count the courts an auto prep booked against the day's limit (once, when it finishes)."""
+    if not prep.auto or getattr(prep, "_counted", False):
+        return
+    prep._counted = True
+    if prep.booked:
+        with _auto_lock:
+            cfg = robot.load_config(prep.acct)
+            log_ = [e for e in cfg.get("auto_booked", []) if e["date"] >= (date.today() - timedelta(days=7)).isoformat()]
+            log_.append({"date": date.today().isoformat(), "courts": len(prep.booked), "label": prep.label})
+            cfg["auto_booked"] = log_
+            robot.save_config(prep.acct, cfg)
+
+
+def auto_left(acct: session.Account) -> int:
+    """Courts the robot may still book on its own today: the limit minus what was booked today and what a
+    running auto booking may still book."""
+    today = date.today().isoformat()
+    done = sum(e["courts"] for e in robot.load_config(acct).get("auto_booked", []) if e["date"] == today)
+    # auto preps not yet written to the log: a running one may still book all it asked for
+    running = sum(len(p.booked) if p.finished else p.quantity for p in booker.for_account(acct)
+                  if p.auto and not getattr(p, "_counted", False) and p.created.date().isoformat() == today)
+    return max(0, AUTO_DAILY_LIMIT - done - running)
+
+
+_MODE_RANK = {"notify": 0, "prepare": 1, "auto": 2}
 
 
 def _on_new_hits(acct: session.Account, found: list[tuple[dict, list[dict]]]) -> None:
-    """The robot found slots for this person: prepare the first auto-prepare one, and tell them about all of
-    them in one message (grouped by venue and day), not one message per hour."""
+    """The robot found slots for this person. Depending on the filters' mode, the first slot is sent at once
+    (auto, within the daily limit) or filled up to the confirmation page (prepare); every other slot gets a
+    預訂 button. All of it goes out as one message, grouped by venue and day."""
     did = _discord_id(acct)
+    bookable = can_book(acct)
     groups: dict[tuple, list[str]] = {}
-    prepared = None
+    started, book_buttons = None, []
+    venues = list(dict.fromkeys(hit["venue"] for hit, _ in found))
     for hit, filters in found:
         label = slot_label(hit["venue"], hit["date"], hit["hour"])
         names = "、".join(f["name"] for f in filters)
         log("warn", f"機器人找到：［{names}］{label}（{hit['count']} 面）", acct.name)
         line = f"{hit['hour']:02d}:00–{hit['hour'] + 1:02d}:00（{hit['count']} 面）"
-        auto = any(f.get("auto_prepare", True) for f in filters)
-        if prepared is None and auto and not booker.busy(acct) and can_book(acct):
-            quantity = robot.clamp_want(hit.get("want"), hit.get("count", 1))
-            start_prep(acct, hit["venue"], hit["date"], hit["hour"], quantity)
-            prepared = hit
-            line += " ← 正在幫你填到學校確認頁…"
+        mode = max((robot.filter_mode(f) for f in filters), key=_MODE_RANK.get, default="notify")
+        quantity = robot.clamp_want(hit.get("want"), hit.get("count", 1))
+        if started is None and mode != "notify" and bookable and not booker.busy(acct):
+            left = auto_left(acct) if mode == "auto" else 0
+            if mode == "auto" and left:
+                start_prep(acct, hit["venue"], hit["date"], hit["hour"], min(quantity, left), auto=True)
+                line += " ← 🤖 自動送出中…"
+            else:
+                start_prep(acct, hit["venue"], hit["date"], hit["hour"], quantity)
+                line += " ← 正在幫你填到學校確認頁…"
+                if mode == "auto":
+                    line += f"（今天自動送出已滿 {AUTO_DAILY_LIMIT} 面，這筆要你確認）"
+            started = hit
+        elif bookable:
+            where = f"{VENUE_NAMES.get(hit['venue'], hit['venue'])} " if len(venues) > 1 else ""
+            book_buttons.append(notify.button(f"預訂 {where}{day_label(hit['date'])} {hit['hour']:02d}:00",
+                                              f"hit:book:{hit['id']}", 1))
         groups.setdefault((hit["venue"], hit["date"][:10]), []).append(line)
     if not groups:
         return
@@ -360,11 +418,14 @@ def _on_new_hits(acct: session.Account, found: list[tuple[dict, list[dict]]]) ->
     for (venue, day), lines in groups.items():
         parts.append(f"**{VENUE_NAMES.get(venue, venue)} {day_label(day)}**")
         parts += [f"• {x}" for x in lines]
-    venues = list(dict.fromkeys(v for v, _ in groups))
-    buttons = [notify.link_button("到學校網站預訂" if len(venues) == 1 else f"訂 {VENUE_NAMES.get(v, v)}",
-                                  school_url(v)) for v in venues[:4]]
-    first = prepared or found[0][0]
-    notify.send(did, "\n".join(parts), ("打開清單", notify.url(f"#hit/{first['id']}")), buttons=buttons)
+    school = [notify.link_button("到學校網站預訂" if len(venues) == 1 else f"學校網站：{VENUE_NAMES.get(v, v)}",
+                                 school_url(v)) for v in venues[:4]]
+    room = 25 - len(school) - 1  # the 打開清單 link comes last
+    if len(book_buttons) > room:
+        parts.append(f"（還有 {len(book_buttons) - room} 個時段的預訂按鈕放不下，請打開清單）")
+    first = started or found[0][0]
+    notify.send(did, "\n".join(parts), ("打開清單", notify.url(f"#hit/{first['id']}")),
+                buttons=book_buttons[:room] + school)
 
 
 def _on_robot_error(msg: str) -> None:
@@ -509,6 +570,23 @@ def handle_interaction(data: dict) -> dict:
                                  args=(acct, order_id, str(data.get("application_id")), str(data.get("token")))).start()
                 log("info", f"在 Discord 按了取消訂單：{order_label(o)}", acct.name)
                 return {"type": 7, "data": {"content": f"正在取消 {order_label(o)}…", "components": []}}
+        if len(parts) == 3 and parts[0] == "hit" and parts[1] == "book":
+            acct = _account_by_discord(discord_id)
+            hit = robot.find_hit(robot.load_hits(acct), parts[2]) if acct else None
+            if not hit:
+                return _reply("找不到這個時段（可能已經過了，或濾網被刪掉了）。")
+            label = slot_label(hit["venue"], hit["date"], hit["hour"])
+            if hit["status"] != "available":
+                return _reply(f"{label} 上次掃描時已經沒有空場了。")
+            current = booker.busy(acct)
+            if current:
+                return _reply(f"你已經有一筆預訂在進行中：{current.label}（{current.message}），完成或取消後再按。")
+            if not can_book(acct):
+                return _reply("伺服器沒辦法幫你訂：要先在網站「設定」連結計中帳號（或重新登入）。也可以直接到學校網站訂。",
+                              [notify.link_button("到學校網站預訂", school_url(hit["venue"]))])
+            start_prep(acct, hit["venue"], hit["date"], hit["hour"], robot.clamp_want(hit.get("want"), hit.get("count", 1)))
+            log("info", f"在 Discord 按了預訂：{label}", acct.name)
+            return _reply(f"正在幫你把 {label} 填到學校確認頁，填好會私訊你按「確認送出」。")
         if len(parts) == 3 and parts[0] == "prep":
             _, decision, prep_id = parts
             prep = booker.get(prep_id)
@@ -815,6 +893,7 @@ class Handler(BaseHTTPRequestHandler):
                 "hits": [h for h in all_hits if h["status"] != "dismissed"],
                 "dismissed": [h for h in all_hits if h["status"] == "dismissed"],
                 "hours": scanner.HOURS, "min_interval": robot.MIN_INTERVAL_MIN, "can_set_interval": admin,
+                "auto_limit": AUTO_DAILY_LIMIT, "auto_left": auto_left(acct),
                 "online_dates": [(today + timedelta(days=n)).isoformat()
                                  for n in range(scanner.BOOK_WINDOW[0], scanner.BOOK_WINDOW[1] + 1)],
                 "members": cfg.get("members", robot.DEFAULT_MEMBERS), "member_types": booker.MEMBER_TYPES,

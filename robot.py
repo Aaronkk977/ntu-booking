@@ -64,10 +64,23 @@ def clean_filter(body: dict, venue_ids: list[str]) -> dict:
         "enabled": bool(body.get("enabled")),
         "venues": [v for v in venue_ids if v in (body.get("venues") or [])],
         "slots": slots,
-        # Fill the form up to the school's confirmation page as soon as a slot turns up, so only the
-        # final 「確認送出」 is left to the person.
-        "auto_prepare": bool(body.get("auto_prepare", True)),
+        "mode": filter_mode(body),
     }
+
+
+MODES = ("notify", "prepare", "auto")
+
+
+def filter_mode(f: dict) -> str:
+    """What happens when a filter finds a slot:
+    notify  - a message with 預訂 buttons; nothing is filled until a button is pressed
+    prepare - fill up to the school's confirmation page at once; 確認送出 is left to the person
+    auto    - fill and send at once (server.AUTO_DAILY_LIMIT courts a day), then report
+    Filters from before modes have only auto_prepare (True -> prepare)."""
+    mode = f.get("mode")
+    if mode in MODES:
+        return mode
+    return "prepare" if f.get("auto_prepare", True) else "notify"
 
 
 def is_active(f: dict) -> bool:

@@ -75,7 +75,9 @@ def link_button(label: str, url: str) -> dict:
 
 
 def row(buttons: list[dict]) -> list[dict]:
-    return [{"type": 1, "components": buttons[:5]}] if buttons else []
+    """Action rows for up to 25 buttons (Discord allows 5 rows of 5)."""
+    buttons = buttons[:25]
+    return [{"type": 1, "components": buttons[i:i + 5]} for i in range(0, len(buttons), 5)]
 
 
 # ---------- interactions ----------
