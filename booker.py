@@ -165,8 +165,10 @@ class Prep:
         self.expires_at: datetime | None = None
         self.booked: list[str] = []
         self.step = 1
+        self.preconfirmed_step = 0  # confirmed after the page expired: re-fill this step and send it at once
         self.created = datetime.now()
         self._decisions: queue.Queue = queue.Queue()
+        self.on_change = lambda prep: None
 
     def public(self) -> dict:
         return {
@@ -208,18 +210,42 @@ def prepare(acct: session.Account, venue: str, label: str, day: str, hour: int, 
             members: dict[str, int], on_change=lambda prep: None) -> Prep:
     """Start filling in the background. `on_change(prep)` is called whenever its status changes."""
     prep = Prep(acct, venue, label, day, hour, quantity, members)
+    prep.on_change = on_change
     with _preps_lock:
         _preps[prep.id] = prep
     threading.Thread(target=_run, args=(prep, on_change), daemon=True, name=f"booking-{acct.name}").start()
     return prep
 
 
-def decide(prep_id: str, decision: str) -> bool:
-    """"confirm" or "cancel" a prep that is waiting at the confirmation page."""
+def slot_passed(prep: Prep) -> bool:
+    return datetime.now() >= datetime.fromisoformat(prep.day[:10]) + timedelta(hours=prep.hour)
+
+
+def decide(prep_id: str, decision: str, on_change=None) -> bool:
+    """"confirm" or "cancel" a prep that is waiting at the confirmation page. An expired prep can still be
+    confirmed: its page was closed, so it is filled again and sent without waiting (the tap was the go-ahead)."""
     prep = _preps.get(prep_id)
-    if not prep or prep.status != "ready" or decision not in ("confirm", "cancel"):
+    if not prep or decision not in ("confirm", "cancel"):
         return False
-    prep._decisions.put(decision)
+    if prep.status == "ready":
+        prep._decisions.put(decision)
+        return True
+    if prep.status != "expired":
+        return False
+    with _preps_lock:
+        if prep.status != "expired":
+            return False
+        if decision == "cancel":
+            prep.status, prep.message = "cancelled", "已取消，沒有送出"
+        else:
+            if slot_passed(prep) or any(p is not prep and p.acct is prep.acct and not p.finished for p in _preps.values()):
+                return False
+            prep.preconfirmed_step = len(prep.booked) + 1
+            prep.status, prep.message = "filling", "重新填寫並送出中…"
+            prep._decisions = queue.Queue()
+    if decision == "confirm":
+        threading.Thread(target=_run, args=(prep, on_change or prep.on_change), daemon=True,
+                         name=f"booking-{prep.acct.name}").start()
     return True
 
 
@@ -299,17 +325,22 @@ def _book(prep: Prep, set_) -> None:
                 page.wait_for_load_state("load", timeout=10000)
                 _save_page(page, f"_confirm_{acct.name}", "the school's confirmation page")
                 prep.screenshot = page.screenshot(full_page=True, type="jpeg", quality=70)
-                prep.expires_at = datetime.now() + timedelta(seconds=HOLD_S)
                 cost = f"，金額 ${prep.amount}" if prep.amount else ""
-                set_("ready", f"{tag}已填到學校確認頁（{prep.court}{cost}），{HOLD_S // 60} 分鐘內按「確認送出」")
-                try:
-                    decision = prep._decisions.get(timeout=HOLD_S)
-                except queue.Empty:
-                    decision = None
+                if prep.preconfirmed_step == k:  # already confirmed by a tap after the first page expired
+                    decision = "confirm"
+                else:
+                    prep.expires_at = datetime.now() + timedelta(seconds=HOLD_S)
+                    set_("ready", f"{tag}已填到學校確認頁（{prep.court}{cost}），{HOLD_S // 60} 分鐘內按「確認送出」")
+                    try:
+                        decision = prep._decisions.get(timeout=HOLD_S)
+                    except queue.Empty:
+                        decision = None
                 if decision != "confirm":
                     prep.screenshot = None
                     set_("cancelled" if decision == "cancel" else "expired",
-                         "已取消，沒有送出" if decision == "cancel" else "超過時間沒有確認，已放棄，沒有送出")
+                         "已取消，沒有送出" if decision == "cancel" else
+                         f"{tag}{HOLD_S // 60} 分鐘內沒按，確認頁先關掉了，還沒送出。之後還想要的話照樣按「確認送出」，"
+                         "會重新填一次並直接送出（場還在的話）")
                     return
                 set_("submitting", f"{tag}送出中…")
                 _confirm(page, prep)

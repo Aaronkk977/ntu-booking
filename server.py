@@ -319,6 +319,10 @@ def _on_prep_change(prep: booker.Prep) -> None:
     elif prep.status == "done":
         notify.send(did, f"✅ {prep.label}\n{prep.message}", ("打開訂單", notify.url("#orders")))
         start_orders(acct)
+    elif prep.status == "expired" and not booker.slot_passed(prep):
+        notify.send(did, f"⏸️ {prep.label}\n{prep.message}", ("打開預訂", notify.url(f"#prep/{prep.id}")),
+                    buttons=[notify.button("確認送出", f"prep:confirm:{prep.id}", 3),
+                             notify.button("不要了", f"prep:cancel:{prep.id}", 4)])
     elif prep.status in ("failed", "expired"):
         notify.send(did, f"⚠️ {prep.label}\n{prep.message}")
         if prep.status == "failed" and "沒有可訂" in prep.message:
@@ -333,20 +337,34 @@ def start_prep(acct: session.Account, venue: str, day: str, hour: int, quantity:
 
 
 def _on_new_hits(acct: session.Account, found: list[tuple[dict, list[dict]]]) -> None:
-    """The robot found slots for this person: prepare the first auto-prepare one, tell them about the rest."""
+    """The robot found slots for this person: prepare the first auto-prepare one, and tell them about all of
+    them in one message (grouped by venue and day), not one message per hour."""
     did = _discord_id(acct)
+    groups: dict[tuple, list[str]] = {}
+    prepared = None
     for hit, filters in found:
         label = slot_label(hit["venue"], hit["date"], hit["hour"])
         names = "、".join(f["name"] for f in filters)
         log("warn", f"機器人找到：［{names}］{label}（{hit['count']} 面）", acct.name)
+        line = f"{hit['hour']:02d}:00–{hit['hour'] + 1:02d}:00（{hit['count']} 面）"
         auto = any(f.get("auto_prepare", True) for f in filters)
-        if auto and not booker.busy(acct) and can_book(acct):
+        if prepared is None and auto and not booker.busy(acct) and can_book(acct):
             quantity = robot.clamp_want(hit.get("want"), hit.get("count", 1))
             start_prep(acct, hit["venue"], hit["date"], hit["hour"], quantity)
-            notify.send(did, f"🔎 找到空位：［{names}］{label}（{hit['count']} 面），正在幫你填到學校確認頁…")
-        else:
-            notify.send(did, f"🔎 找到空位：［{names}］{label}（{hit['count']} 面）", ("打開清單", notify.url(f"#hit/{hit['id']}")),
-                        buttons=[notify.link_button("到學校網站預訂", school_url(hit["venue"]))])
+            prepared = hit
+            line += " ← 正在幫你填到學校確認頁…"
+        groups.setdefault((hit["venue"], hit["date"][:10]), []).append(line)
+    if not groups:
+        return
+    parts = [f"🔎 找到 {len(found)} 個空位：" if len(found) > 1 else "🔎 找到空位："]
+    for (venue, day), lines in groups.items():
+        parts.append(f"**{VENUE_NAMES.get(venue, venue)} {day_label(day)}**")
+        parts += [f"• {x}" for x in lines]
+    venues = list(dict.fromkeys(v for v, _ in groups))
+    buttons = [notify.link_button("到學校網站預訂" if len(venues) == 1 else f"訂 {VENUE_NAMES.get(v, v)}",
+                                  school_url(v)) for v in venues[:4]]
+    first = prepared or found[0][0]
+    notify.send(did, "\n".join(parts), ("打開清單", notify.url(f"#hit/{first['id']}")), buttons=buttons)
 
 
 def _on_robot_error(msg: str) -> None:
@@ -496,11 +514,16 @@ def handle_interaction(data: dict) -> dict:
             prep = booker.get(prep_id)
             if not prep or _discord_id(prep.acct) != discord_id:
                 return _reply("找不到這筆預訂（可能已過期，或伺服器重新啟動過）。")
+            was_expired = prep.status == "expired"
             if not booker.decide(prep.id, decision):
+                if was_expired and booker.slot_passed(prep):
+                    return _reply("這個時段已經過了，不能再訂。")
                 return _reply(f"這筆現在是「{prep.message}」，不能再{'送出' if decision == 'confirm' else '取消'}。")
             log("info", f"預訂 {prep.label}：在 Discord 按了{'確認送出' if decision == 'confirm' else '取消'}", prep.acct.name)
             # Replace the message's buttons, so nobody presses them twice; the result comes as a new DM.
-            text = f"🏸 {prep.label}\n" + ("已按「確認送出」，送出中…" if decision == "confirm" else "已取消，沒有送出。")
+            text = f"🏸 {prep.label}\n" + (
+                ("已按「確認送出」，重新填寫並送出中…" if was_expired else "已按「確認送出」，送出中…")
+                if decision == "confirm" else "已取消，沒有送出。")
             return {"type": 7, "data": {"content": text, "components": []}}
         return _reply("這個按鈕已經失效。")
     return _reply("不支援的操作。")

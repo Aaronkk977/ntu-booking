@@ -1090,6 +1090,8 @@ function renderPreps() {
     ${p.status === "ready" ? `<div class="big">
       <button type="button" class="primary" data-prep-confirm="${p.id}">確認送出</button>
       <button type="button" data-prep-cancel="${p.id}">取消</button></div>` : ""}
+    ${p.status === "expired" ? `<div class="big">
+      <button type="button" class="primary" data-prep-confirm="${p.id}">重新填寫並送出</button></div>` : ""}
     ${p.status === "done" ? `<div class="actions"><button type="button" class="small" data-goto-orders>到訂單分頁繳費</button></div>` : ""}
     ${p.has_screenshot && p.status === "ready" ? `<img src="/api/preps/${p.id}/shot?k=${encodeURIComponent(p.court || "")}" alt="學校確認頁截圖">` : ""}
   </div>`;
