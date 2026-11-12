@@ -8,6 +8,8 @@
   python manage.py set-discord-token            asks for the bot token (not echoed)
   python manage.py set-public-url https://x.trycloudflare.com [--notify]
                                                 --notify DMs everybody the new address
+  python manage.py discord-setup                register /link, /unlink and the button endpoint with
+                                                Discord (done by the two commands above too)
 """
 import getpass
 import sys
@@ -54,6 +56,13 @@ def main(argv: list[str]) -> None:
         cfg["scan_account"] = _names(args)[0]
     elif cmd == "set-discord-token":
         cfg["discord_token"] = (args[0] if args else getpass.getpass("Discord bot token: ")).strip()
+        config.save(cfg)
+        print("已更新。")
+        _discord_setup()
+        return
+    elif cmd == "discord-setup":
+        _discord_setup()
+        return
     elif cmd == "set-public-url":
         if not args or not args[0].startswith(("https://", "http://")):
             sys.exit("請給完整網址，例如 https://booking.example.com")
@@ -61,6 +70,7 @@ def main(argv: list[str]) -> None:
         cfg["public_url"] = args[0].rstrip("/")
         config.save(cfg)
         print(f"public_url = {cfg['public_url']}")
+        _discord_setup()  # Discord must send /link and button presses to the new address
         if changed and "--notify" in args:
             _notify_everybody(f"🔗 場地預約的新網址：{cfg['public_url']}")
         return
@@ -68,6 +78,18 @@ def main(argv: list[str]) -> None:
         sys.exit(f"不認得的指令：{cmd}\n{__doc__}")
     config.save(cfg)
     print("已更新。")
+
+
+def _discord_setup() -> None:
+    cfg = config.load()
+    if not cfg["discord_token"] or not cfg["public_url"].startswith("https://"):
+        return
+    import notify
+
+    try:
+        print(notify.setup_interactions(cfg["public_url"]))
+    except Exception as e:
+        print(f"Discord 設定沒有成功：{e}")
 
 
 def _end_web_sessions(names: set[str]) -> None:

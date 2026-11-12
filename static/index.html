@@ -458,13 +458,14 @@
   <p id="meLine" style="margin:0"></p>
   <p class="hint" id="meLoginError" style="color:var(--err)" hidden></p>
   <h3 class="sub">Discord 通知</h3>
-  <label class="field"><span>Discord 使用者 ID</span>
-    <input id="discordId" type="text" inputmode="numeric" placeholder="例：123456789012345678"></label>
-  <div class="actions">
-    <button type="button" class="primary" id="discordSave">儲存</button>
-    <button type="button" id="discordTest">傳測試訊息</button>
-  </div>
-  <p class="hint" id="discordHint">Discord「設定 → 進階 → 開發者模式」打開後，在自己的頭像按右鍵（手機長按）→「複製使用者 ID」。你要和 bot 在同一個 Discord 伺服器，它才能私訊你。</p>
+  <p style="margin:0 0 6px" id="discordState"></p>
+  <p class="hint" id="discordHint">在 Discord 對 bot 輸入 <b>/link</b>（私訊 bot，或在 bot 所在的伺服器裡），點它回的按鈕就會連結到這個帳號。要停止通知就輸入 <b>/unlink</b>。bot 只能私訊和它在同一個 Discord 伺服器的人。</p>
+  <div class="actions"><button type="button" id="discordTest">傳測試訊息</button></div>
+  <details class="fold"><summary>改用手動輸入使用者 ID</summary>
+    <label class="field" style="margin-top:10px"><span>Discord 使用者 ID（開發者模式 → 在自己頭像按右鍵 →「複製使用者 ID」）</span>
+      <input id="discordId" type="text" inputmode="numeric" placeholder="例：123456789012345678"></label>
+    <div class="actions"><button type="button" class="small" id="discordSave">儲存</button></div>
+  </details>
   <h3 class="sub">預訂人數</h3>
   <div class="group" id="members"></div>
   <p class="hint">羽球等場地至少 2 人</p>
@@ -557,6 +558,7 @@ function renderMe() {
   $("meLoginError").textContent = me.login_error || "";
   if (document.activeElement !== $("discordId")) $("discordId").value = me.discord_id || "";
   $("discordTest").disabled = !me.discord_id || !me.discord_ready;
+  $("discordState").innerHTML = me.discord_id ? '<span class="pill ok">已連結 Discord</span>' : '<span class="pill warn">還沒連結 Discord</span>';
   if (!me.discord_ready) $("discordHint").textContent = "伺服器還沒設定 Discord bot，請管理者執行 manage.py set-discord-token。";
   $("adminBox").hidden = !me.admin;
   if (me.admin) {
@@ -1544,10 +1546,21 @@ function initHeatControls() {
   $("heatSince").max = ymd(new Date());
 }
 
-/* ---------- links from Discord: #prep/<id>, #hit/<id>, #orders ---------- */
+/* ---------- links from Discord: #link/<code>, #prep/<id>, #hit/<id>, #orders ---------- */
+async function linkDiscord(code) {
+  history.replaceState(null, "", location.pathname); // the code works once
+  if (!confirm(`把剛剛輸入 /link 的 Discord 帳號連結到 ${me.account}？之後的通知會私訊到那裡。`)) return;
+  try {
+    await api("/api/me/discord/link", { method: "POST", body: JSON.stringify({ code }) });
+    await loadMe();
+    toast("已連結 Discord，bot 會傳一則確認訊息給你");
+  } catch (err) { toast(err.message, true); }
+}
+
 function followHash() {
   const [kind, id] = location.hash.replace(/^#/, "").split("/");
-  if (kind === "prep" && id) { shownPrep = id; loadPreps(); window.scrollTo(0, 0); }
+  if (kind === "link" && id) linkDiscord(id);
+  else if (kind === "prep" && id) { shownPrep = id; loadPreps(); window.scrollTo(0, 0); }
   else if (kind === "hit" && id) {
     showTab("filter");
     setTimeout(() => { const el = $(`hit-${id}`); if (el) { el.scrollIntoView({ block: "center" }); el.classList.add("flash"); } }, 300);

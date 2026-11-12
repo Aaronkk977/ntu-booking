@@ -219,7 +219,9 @@ def _on_prep_change(prep: booker.Prep) -> None:
     log({"failed": "error", "expired": "warn"}.get(prep.status, "info"), f"預訂 {prep.label}：{prep.message}", acct.name)
     did = _discord_id(acct)
     if prep.status == "ready":
-        notify.send(did, f"🏸 {prep.label}\n{prep.message}", ("打開確認頁", notify.url(f"#prep/{prep.id}")))
+        notify.send(did, f"🏸 {prep.label}\n{prep.message}", ("看確認頁截圖", notify.url(f"#prep/{prep.id}")),
+                    buttons=[notify.button("確認送出", f"prep:confirm:{prep.id}", 3),
+                             notify.button("取消", f"prep:cancel:{prep.id}", 4)])
     elif prep.status == "done":
         notify.send(did, f"✅ {prep.label}\n{prep.message}", ("打開訂單", notify.url("#orders")))
         start_orders(acct)
@@ -255,6 +257,85 @@ def _on_new_hits(acct: session.Account, found: list[tuple[dict, list[dict]]]) ->
 def _on_robot_error(msg: str) -> None:
     for name in config.load()["admins"]:
         notify.send(_discord_id(session.account(name)), f"🤖 機器人掃描失敗：{msg}")
+
+
+# ---------- Discord interactions (/link, /unlink, the Confirm / Cancel buttons) ----------
+
+LINK_CODE_S = 10 * 60
+_link_codes: dict[str, tuple[str, float]] = {}  # one-time code from /link -> (discord user id, expiry)
+EPHEMERAL = 64  # only the person who typed the command sees the reply
+
+
+def _account_by_discord(discord_id: str) -> session.Account | None:
+    for name in config.users():
+        acct = session.account(name)
+        if _discord_id(acct) == discord_id:
+            return acct
+    return None
+
+
+def set_discord(acct: session.Account, discord_id: str) -> None:
+    """Link one Discord account to one site account (dropping it from anybody else who had it)."""
+    if discord_id:
+        other = _account_by_discord(discord_id)
+        if other and other is not acct:
+            cfg = robot.load_config(other)
+            cfg["discord_id"] = ""
+            robot.save_config(other, cfg)
+    cfg = robot.load_config(acct)
+    cfg["discord_id"] = discord_id
+    robot.save_config(acct, cfg)
+
+
+def _reply(text: str, buttons: list[dict] | None = None) -> dict:
+    return {"type": 4, "data": {"content": text, "flags": EPHEMERAL, "components": notify.row(buttons or []),
+                                "allowed_mentions": {"parse": []}}}
+
+
+def handle_interaction(data: dict) -> dict:
+    """The response to one verified interaction from Discord."""
+    kind = data.get("type")
+    if kind == 1:  # PING, when Discord checks the endpoint
+        return {"type": 1}
+    user = (data.get("member") or {}).get("user") or data.get("user") or {}
+    discord_id = str(user.get("id") or "")
+    if kind == 2:
+        name = (data.get("data") or {}).get("name")
+        if name == "link":
+            now = time.monotonic()
+            for c in [c for c, (_, exp) in _link_codes.items() if exp < now]:
+                del _link_codes[c]
+            code = secrets.token_urlsafe(16)
+            _link_codes[code] = (discord_id, now + LINK_CODE_S)
+            url = notify.url(f"#link/{code}")
+            log("info", f"Discord 使用者 {user.get('username', discord_id)} 要求連結")
+            if not url.startswith("https://"):  # link buttons need https (local testing)
+                return _reply(f"打開這個網址完成連結（10 分鐘內有效）：{url}")
+            return _reply("點下面的按鈕，在預約網站登入後按「連結」，之後的通知就會私訊到這裡（10 分鐘內有效）。",
+                          [notify.link_button("連結到預約網站", url)])
+        if name == "unlink":
+            acct = _account_by_discord(discord_id)
+            if not acct:
+                return _reply("這個 Discord 帳號沒有連結任何預約網站帳號。")
+            set_discord(acct, "")
+            log("info", "已用 /unlink 取消 Discord 連結", acct.name)
+            return _reply(f"已取消和 {acct.name} 的連結，不會再收到通知。")
+        return _reply("不認得這個指令。")
+    if kind == 3:  # a button
+        parts = str((data.get("data") or {}).get("custom_id", "")).split(":")
+        if len(parts) == 3 and parts[0] == "prep":
+            _, decision, prep_id = parts
+            prep = booker.get(prep_id)
+            if not prep or _discord_id(prep.acct) != discord_id:
+                return _reply("找不到這筆預訂（可能已過期，或伺服器重新啟動過）。")
+            if not booker.decide(prep.id, decision):
+                return _reply(f"這筆現在是「{prep.message}」，不能再{'送出' if decision == 'confirm' else '取消'}。")
+            log("info", f"預訂 {prep.label}：在 Discord 按了{'確認送出' if decision == 'confirm' else '取消'}", prep.acct.name)
+            # Replace the message's buttons, so nobody presses them twice; the result comes as a new DM.
+            text = f"🏸 {prep.label}\n" + ("已按「確認送出」，送出中…" if decision == "confirm" else "已取消，沒有送出。")
+            return {"type": 7, "data": {"content": text, "components": []}}
+        return _reply("這個按鈕已經失效。")
+    return _reply("不支援的操作。")
 
 
 # ---------- search & history (shared results) ----------
@@ -379,13 +460,23 @@ class Handler(BaseHTTPRequestHandler):
     def _error(self, status: int, msg: str = ""):
         self._json({"error": msg or {401: "請先登入", 403: "不允許", 404: "找不到"}.get(status, "錯誤")}, status)
 
-    def _body(self) -> dict:
+    def _raw(self) -> bytes:
         length = min(int(self.headers.get("Content-Length") or 0), 64 * 1024)
+        return self.rfile.read(length) if length else b""
+
+    @staticmethod
+    def _parse(raw: bytes) -> dict:
         try:
-            data = json.loads(self.rfile.read(length) or b"{}")
+            data = json.loads(raw or b"{}")
             return data if isinstance(data, dict) else {}
         except (json.JSONDecodeError, UnicodeDecodeError):
             return {}
+
+    def _interaction(self, raw: bytes):
+        """Discord's interactions: no cookie and no Origin; the Ed25519 signature is the proof instead."""
+        if not notify.verify(self.headers.get("X-Signature-Ed25519", ""), self.headers.get("X-Signature-Timestamp", ""), raw):
+            return self._send(401, b"invalid request signature", "text/plain")
+        return self._json(handle_interaction(self._parse(raw)))
 
     def _cookie_header(self, token: str, max_age: int) -> dict:
         secure = "; Secure" if self._via_public() and config.load()["public_url"].startswith("https://") else ""
@@ -411,12 +502,19 @@ class Handler(BaseHTTPRequestHandler):
         self._dispatch("DELETE")
 
     def _dispatch(self, method: str):
+        path = self.path.split("?")[0]
+        raw = self._raw() if method != "GET" else b""  # read it first: the connection is kept alive
+        if (method, path) == ("POST", "/discord/interactions"):
+            try:
+                return self._interaction(raw)
+            except Exception as e:
+                log("error", f"Discord 互動處理失敗：{_err(e)}")
+                return self._json(_reply("伺服器錯誤，請稍後再試。"))
         if not self._trusted(write=method != "GET"):
             self.close_connection = True
             return self._error(403)
-        path = self.path.split("?")[0]
         try:
-            body = self._body() if method != "GET" else {}  # read it first: the connection is kept alive
+            body = self._parse(raw)
             if not path.startswith("/api/"):
                 return self._static(path) if method == "GET" else self._error(404)
             if (method, path) == ("POST", "/api/login"):
@@ -537,9 +635,15 @@ class Handler(BaseHTTPRequestHandler):
             did = str(body.get("discord_id") or "").strip()
             if did and not (did.isdigit() and 15 <= len(did) <= 21):
                 return self._error(400, "Discord 使用者 ID 是一串 17–20 位數字")
-            cfg = robot.load_config(acct)
-            cfg["discord_id"] = did
-            robot.save_config(acct, cfg)
+            set_discord(acct, did)
+            return self._json({"ok": True})
+        if path == "/api/me/discord/link":  # the page opened from /link's button
+            entry = _link_codes.pop(str(body.get("code") or ""), None)
+            if not entry or entry[1] < time.monotonic():
+                return self._error(400, "這個連結已經用過或過期了，請在 Discord 再打一次 /link")
+            set_discord(acct, entry[0])
+            log("info", "已用 /link 連結 Discord", acct.name)
+            notify.send(entry[0], f"✅ 已連結到 {acct.name}，之後的空位和預訂通知會私訊到這裡。")
             return self._json({"ok": True})
         if path == "/api/me/discord/test":
             try:
