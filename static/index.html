@@ -1004,8 +1004,6 @@ $("scanBtn").onclick = guard(async () => { await api("/api/robot/scan", { method
 $("hits").onclick = guard(async (e) => {
   const book = e.target.dataset.book, dismiss = e.target.dataset.dismiss;
   if (book) {
-    const h = robotData.hits.find((x) => x.id === book);
-    if (h && !confirm(`直接預訂 ${venueName(h.venue)} ${fmtDate(h.date)} ${timeRange(h.hour, 1)}（${h.want || 1} 面）？\n訂到後要在期限內繳費，不要的話再取消。`)) return;
     try {
       const r = await api(`/api/robot/hits/${book}/book`, { method: "POST" });
       toast("正在幫你訂…");
