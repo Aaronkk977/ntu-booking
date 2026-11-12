@@ -8,6 +8,11 @@ data/                      (chmod 700; everything here is private to the account
   history_stats.json       history statistics, shared
   snapshots/               pages saved for debugging
   users/<account>/         one folder per person: credentials.json, session.json, robot.json, hits.json, orders.json
+
+Two kinds of accounts:
+  b12345678                logged in with a 計中 account (must be on the allow list)
+  discord-<user id>        logged in through Discord's /login (anybody in the bot's Discord server); can
+                           link a 計中 account later for server-side booking
 """
 import json
 import os
@@ -23,6 +28,7 @@ CONFIG_FILE = DATA / "config.json"
 
 # The 計中 account name, e.g. b12345678 (lowercase letters, digits, a few separators).
 ACCOUNT_RE = re.compile(r"^[a-z0-9][a-z0-9._-]{0,31}$")
+DISCORD_PREFIX = "discord-"
 
 DEFAULTS = {
     "allowed": [],          # 計中 accounts that may log in to this web app
@@ -31,6 +37,8 @@ DEFAULTS = {
     "discord_token": "",    # bot token (Bot ...), for direct messages
     "public_url": "",       # e.g. https://booking.example.com, used for links and the Origin check
     "interval_min": 5,      # shared robot scan interval
+    "discord_guild": None,  # Discord server whose members may log in with /login; None = the bot's only server
+    "blocked": [],          # Discord-login accounts the admin turned away
 }
 
 _lock = threading.Lock()
@@ -51,7 +59,15 @@ def normalize_account(raw: str) -> str | None:
     name, _, domain = (raw or "").strip().lower().partition("@")
     if domain and domain != "ntu.edu.tw":
         return None
-    return name if ACCOUNT_RE.match(name) else None
+    return name if ACCOUNT_RE.match(name) and not name.startswith(DISCORD_PREFIX) else None
+
+
+def discord_account(discord_id: str) -> str:
+    return DISCORD_PREFIX + discord_id
+
+
+def is_discord_account(account: str) -> bool:
+    return account.startswith(DISCORD_PREFIX)
 
 
 def load() -> dict:
@@ -77,6 +93,8 @@ def save(cfg: dict) -> None:
 
 def is_allowed(account: str) -> bool:
     cfg = load()
+    if is_discord_account(account):  # Discord membership was checked at /login
+        return account not in cfg["blocked"]
     return account in cfg["allowed"] or account in cfg["admins"]
 
 

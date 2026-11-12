@@ -28,6 +28,8 @@ API = "https://discord.com/api/v10"
 USER_AGENT = "DiscordBot (https://github.com, 1.0) ntu-booking"
 
 COMMANDS = [
+    {"name": "login", "type": 1, "description": "Get a one-time link that logs you in to the booking site",
+     "contexts": [0, 1, 2]},
     {"name": "link", "type": 1, "description": "Link this Discord account to your booking-site account",
      "contexts": [0, 1, 2]},
     {"name": "unlink", "type": 1, "description": "Stop booking notifications to this Discord account",
@@ -107,7 +109,7 @@ def setup_interactions(public_url: str, tries: int = 6) -> str:
     for i in range(tries):
         try:
             _call("PATCH", "/applications/@me", {"interactions_endpoint_url": public_url + "/discord/interactions"})
-            return f"已註冊 /link、/unlink，互動端點：{public_url}/discord/interactions"
+            return f"已註冊 /login、/link、/unlink，互動端點：{public_url}/discord/interactions"
         except OSError as e:  # the new address isn't reachable yet
             last = e
             time.sleep(5 * (i + 1))

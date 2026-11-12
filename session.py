@@ -102,9 +102,18 @@ class Account:
 
     # ---------- login ----------
 
-    def sso_login(self, password: str, timeout_s: int = 60) -> None:
-        """Log in through 計中 SSO in a headless browser. Raises NotLoggedIn when it does not end logged in
-        (wrong password, or an extra step such as a verification code that needs a person)."""
+    @property
+    def school(self) -> str | None:
+        """The 計中 account this person logs in to the school's site with (None: not linked yet)."""
+        return credentials.school(self.name)
+
+    def sso_login(self, password: str, timeout_s: int = 60, school: str | None = None) -> None:
+        """Log in through 計中 SSO in a headless browser, as `school` (default: the linked 計中 account).
+        Raises NotLoggedIn when it does not end logged in (wrong password, or an extra step such as a
+        verification code that needs a person)."""
+        school = school or self.school
+        if not school:
+            raise NotLoggedIn("還沒連結計中帳號")
         from playwright.sync_api import sync_playwright
 
         with sync_playwright() as p:
@@ -118,7 +127,7 @@ class Account:
                 page = ctx.new_page()
                 page.goto(SSO_URL)
                 page.wait_for_url(lambda u: urlparse(u).hostname == SSO_HOST, timeout=20000)
-                page.fill('input[name$="UsernameTextBox"]', self.name)
+                page.fill('input[name$="UsernameTextBox"]', school)
                 page.fill('input[name$="PasswordTextBox"]', password)
                 page.click('input[name$="SubmitButton"]')
                 if not _wait_logged_in(page, ctx, timeout_s):
@@ -141,9 +150,12 @@ class Account:
                 return True
             if time.monotonic() - self._relogin_failed_at < RELOGIN_COOLDOWN_S and self._relogin_failed_at:
                 return False
+            if not self.school:
+                self.login_error = "還沒連結計中帳號"
+                return False
             password = credentials.load(self.name)
             if not password:
-                self.login_error = "伺服器上沒有你的密碼，請重新登入這個網站"
+                self.login_error = "學校網站的登入已過期；你選了不儲存密碼，請在「設定」重新登入計中帳號"
                 return False
             try:
                 self.sso_login(password)

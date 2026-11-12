@@ -1,4 +1,7 @@
-"""Store each person's 計中 password, encrypted, in data/users/<account>/credentials.json.
+"""Store each person's linked 計中 account and its password, encrypted, in data/users/<account>/credentials.json.
+
+The password may be left out ("don't keep my password"): then the server can use the school login only
+until it expires (an hour or two) and cannot log in again on its own.
 
 The password is encrypted with Fernet (AES + HMAC). The key comes from the NTU_BOOKING_KEY environment
 variable, or data/secret.key (created on first use, readable only by the account running the server).
@@ -35,19 +38,33 @@ def _file(account: str):
     return config.user_dir(account) / "credentials.json"
 
 
-def save(account: str, password: str) -> None:
-    token = _key().encrypt(password.encode("utf-8")).decode("ascii")
-    config.write_json(_file(account), {"account": account, "password": token})
+def save(account: str, school: str, password: str | None) -> None:
+    """Link `school` (a 計中 account) to `account`; keep the password only when given."""
+    token = _key().encrypt(password.encode("utf-8")).decode("ascii") if password else None
+    config.write_json(_file(account), {"school": school, "password": token})
+
+
+def _read(account: str) -> dict | None:
+    f = _file(account)
+    return json.loads(f.read_text(encoding="utf-8")) if f.exists() else None
+
+
+def school(account: str) -> str | None:
+    """The 計中 account linked to this site account."""
+    data = _read(account)
+    if data:
+        return data.get("school") or data.get("account")  # "account": files from before Discord login
+    return None if config.is_discord_account(account) else account
 
 
 def load(account: str) -> str | None:
     """The stored password, or None when there is none or it can't be decrypted (key changed)."""
-    f = _file(account)
-    if not f.exists():
+    data = _read(account)
+    if not data or not data.get("password"):
         return None
     try:
-        return _key().decrypt(json.loads(f.read_text(encoding="utf-8"))["password"].encode()).decode("utf-8")
-    except (InvalidToken, KeyError, ValueError):
+        return _key().decrypt(data["password"].encode()).decode("utf-8")
+    except (InvalidToken, ValueError):
         return None
 
 

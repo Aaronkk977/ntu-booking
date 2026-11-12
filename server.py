@@ -1,9 +1,11 @@
 """Web app for NTU venue booking, for a few people, opened from their phones.
 
 Listens on 127.0.0.1 only; the outside world reaches it through a Cloudflare Tunnel (see deploy/).
-People log in with their own 計中 account (only accounts on the allow list in data/config.json); the
-password is checked by really logging in to the school's site through 計中 SSO, then kept encrypted so
-the server can log in again on its own when the school's login expires.
+People log in with Discord (/login to the bot, for anybody in the bot's Discord server) or with a 計中
+account on the allow list. A Discord-login account gets vacancy alerts and books on the school's site
+itself; once it links a 計中 account (checked by really logging in through 計中 SSO), the server can
+prepare bookings for it too. The 計中 password is kept encrypted, unless the person chose not to keep it,
+so the server can log in again on its own when the school's login expires.
 
 Run:  python server.py        (PORT, PUBLIC_URL and NTU_BOOKING_DATA can be set in the environment)
 """
@@ -71,6 +73,21 @@ def log(level: str, msg: str, account: str | None = None) -> None:
 
 def _err(e: Exception) -> str:
     return f"{e.__class__.__name__}: {str(e).splitlines()[0] if str(e) else ''}"
+
+
+def can_book(acct: session.Account) -> bool:
+    """The server can use this person's school login: a linked 計中 account with a stored password, or
+    (password not kept) a school login that hasn't expired yet."""
+    return bool(acct.school) and (credentials.load(acct.name) is not None or acct.has_session())
+
+
+def school_url(venue: str) -> str:
+    """The school's own order page of a venue, for booking there by hand."""
+    return f"{session.BASE}/order/?Add={venue}"
+
+
+def display_name(acct: session.Account) -> str:
+    return robot.load_config(acct).get("display") or acct.school or acct.name
 
 
 def slot_label(venue: str, day: str, hour: int) -> str:
@@ -246,12 +263,13 @@ def _on_new_hits(acct: session.Account, found: list[tuple[dict, list[dict]]]) ->
         names = "、".join(f["name"] for f in filters)
         log("warn", f"機器人找到：［{names}］{label}（{hit['count']} 面）", acct.name)
         auto = any(f.get("auto_prepare", True) for f in filters)
-        if auto and not booker.busy(acct) and credentials.load(acct.name):
+        if auto and not booker.busy(acct) and can_book(acct):
             quantity = robot.clamp_want(hit.get("want"), hit.get("count", 1))
             start_prep(acct, hit["venue"], hit["date"], hit["hour"], quantity)
             notify.send(did, f"🔎 找到空位：［{names}］{label}（{hit['count']} 面），正在幫你填到學校確認頁…")
         else:
-            notify.send(did, f"🔎 找到空位：［{names}］{label}（{hit['count']} 面）", ("打開清單", notify.url(f"#hit/{hit['id']}")))
+            notify.send(did, f"🔎 找到空位：［{names}］{label}（{hit['count']} 面）", ("打開清單", notify.url(f"#hit/{hit['id']}")),
+                        buttons=[notify.link_button("到學校網站預訂", school_url(hit["venue"]))])
 
 
 def _on_robot_error(msg: str) -> None:
@@ -263,6 +281,38 @@ def _on_robot_error(msg: str) -> None:
 
 LINK_CODE_S = 10 * 60
 _link_codes: dict[str, tuple[str, float]] = {}  # one-time code from /link -> (discord user id, expiry)
+_login_codes: dict[str, tuple[str, str, float]] = {}  # from /login -> (discord user id, name, expiry)
+
+
+def _new_code(codes: dict, *value) -> str:
+    now = time.monotonic()
+    for c in [c for c, v in codes.items() if v[-1] < now]:
+        del codes[c]
+    code = secrets.token_urlsafe(16)
+    codes[code] = (*value, now + LINK_CODE_S)
+    return code
+
+
+def _home_guild() -> str | None:
+    """The Discord server whose members may log in: the configured one, or the bot's only server."""
+    guild = config.load()["discord_guild"]
+    if guild:
+        return str(guild)
+    guilds = notify._call("GET", "/users/@me/guilds")
+    return guilds[0]["id"] if len(guilds) == 1 else None
+
+
+def _is_member(data: dict, discord_id: str) -> bool:
+    guild = _home_guild()
+    if not guild:
+        return False
+    if str(data.get("guild_id") or "") == guild and data.get("member"):
+        return True
+    try:
+        notify._call("GET", f"/guilds/{guild}/members/{discord_id}")
+        return True
+    except OSError:  # 404: not a member
+        return False
 EPHEMERAL = 64  # only the person who typed the command sees the reply
 
 
@@ -270,6 +320,14 @@ def _account_by_discord(discord_id: str) -> session.Account | None:
     for name in config.users():
         acct = session.account(name)
         if _discord_id(acct) == discord_id:
+            return acct
+    return None
+
+
+def _account_by_school(school: str) -> session.Account | None:
+    for name in config.users():
+        acct = session.account(name)
+        if acct.school == school:
             return acct
     return None
 
@@ -313,6 +371,17 @@ def handle_interaction(data: dict) -> dict:
                 return _reply(f"打開這個網址完成連結（10 分鐘內有效）：{url}")
             return _reply("點下面的按鈕，在預約網站登入後按「連結」，之後的通知就會私訊到這裡（10 分鐘內有效）。",
                           [notify.link_button("連結到預約網站", url)])
+        if name == "login":
+            if config.discord_account(discord_id) in config.load()["blocked"]:
+                return _reply("管理者已停用你的帳號。")
+            if not _is_member(data, discord_id):
+                return _reply("只有在預約系統的 Discord 伺服器裡的人才能登入，請先請管理者邀你加入。")
+            uname = str(user.get("global_name") or user.get("username") or discord_id)
+            url = notify.url(f"#login/{_new_code(_login_codes, discord_id, uname)}")
+            if not url.startswith("https://"):
+                return _reply(f"打開這個網址登入（10 分鐘內有效，只能用一次）：{url}")
+            return _reply("點下面的按鈕登入預約網站（10 分鐘內有效，只能用一次，不要轉傳）。",
+                          [notify.link_button("登入預約網站", url)])
         if name == "unlink":
             acct = _account_by_discord(discord_id)
             if not acct:
@@ -360,10 +429,13 @@ def _shown_results() -> dict[str, dict]:
     return {**scanner.partial_results(), **_search_results}
 
 
-def _run_search(acct: session.Account, venues: list[str], force: bool) -> None:
+def _run_search(by: session.Account, venues: list[str], force: bool) -> None:
     def progress(i, n):
         _search_job.update(done=i, total=n)
 
+    # Without a school login of their own, people search through the scan account (results are shared anyway).
+    scan = config.scan_account()
+    acct = by if can_book(by) or not scan else session.account(scan)
     try:
         for step, venue in enumerate(venues, start=1):
             _search_job.update(venue=venue, step=step, done=0, total=0)
@@ -371,11 +443,11 @@ def _run_search(acct: session.Account, venues: list[str], force: bool) -> None:
             result = acct.with_relogin(lambda: scanner.search(acct, venue, progress, max_age_s=max_age))
             _search_results[venue] = result
     except session.NotLoggedIn as e:
-        log("error", f"搜尋失敗：{acct.login_error or e}", acct.name)
+        log("error", f"搜尋失敗：{acct.login_error or e}", by.name)
     except session.Preempted:
-        log("warn", "搜尋被預訂中斷，預訂完成後請再搜尋一次", acct.name)
+        log("warn", "搜尋被預訂中斷，預訂完成後請再搜尋一次", by.name)
     except Exception as e:
-        log("error", f"搜尋失敗：{_err(e)}", acct.name)
+        log("error", f"搜尋失敗：{_err(e)}", by.name)
     finally:
         _search_job.update(running=False)
 
@@ -519,6 +591,8 @@ class Handler(BaseHTTPRequestHandler):
                 return self._static(path) if method == "GET" else self._error(404)
             if (method, path) == ("POST", "/api/login"):
                 return self._login(body)
+            if (method, path) == ("POST", "/api/login/discord"):
+                return self._login_discord(body)
             acct = self._account()
             if acct is None:
                 return self._error(401)
@@ -542,26 +616,49 @@ class Handler(BaseHTTPRequestHandler):
         ip = self._client_ip()
         if _too_many_fails(f"a:{name}", f"i:{ip}"):
             return self._error(429, "失敗次數太多，請 15 分鐘後再試")
-        if not config.is_allowed(name):
+        # A Discord-login account that linked this 計中 account is the one to log in to.
+        acct = _account_by_school(name) or session.account(name)
+        if not config.is_allowed(acct.name):
             _add_fail(f"i:{ip}")
             log("warn", f"不在允許名單的帳號嘗試登入：{name}（{ip}）")
-            return self._error(403, "這個帳號不在允許名單裡，請找管理者加入")
-        acct = session.account(name)
+            return self._error(403, "這個計中帳號不在允許名單裡。請在 Discord 對 bot 打 /login 登入，或找管理者加入名單")
         acct.dir.mkdir(parents=True, exist_ok=True)
         try:
-            acct.sso_login(password)
+            acct.sso_login(password, school=name)
         except Exception as e:
             _add_fail(f"a:{name}", f"i:{ip}")
             log("warn", f"登入失敗：{_err(e)}", name)
             return self._error(401, "計中帳號登入沒有成功，請確認帳號密碼" if isinstance(e, session.NotLoggedIn)
                                else f"無法連到學校網站（{_err(e)}）")
-        credentials.save(name, password)
-        token = new_web_session(name)
-        log("info", "已登入", name)
+        credentials.save(acct.name, name, password if body.get("remember", True) else None)
+        token = new_web_session(acct.name)
+        log("info", "已用計中帳號登入", acct.name)
         start_orders(acct)
-        if name == config.scan_account():
+        if acct.name == config.scan_account():
             ROBOT.logged_in()
-        return self._json({"ok": True, "account": name}, headers=self._cookie_header(token, WEB_SESSION_DAYS * 86400))
+        return self._json({"ok": True, "account": acct.name}, headers=self._cookie_header(token, WEB_SESSION_DAYS * 86400))
+
+    def _login_discord(self, body: dict):
+        """The page opened from /login's button: log in as the Discord user who typed /login."""
+        entry = _login_codes.pop(str(body.get("code") or ""), None)
+        if not entry or entry[2] < time.monotonic():
+            return self._error(400, "這個登入連結已經用過或過期了，請在 Discord 再打一次 /login")
+        discord_id, uname, _ = entry
+        acct = _account_by_discord(discord_id)
+        if acct is None:
+            name = config.discord_account(discord_id)
+            if not config.is_allowed(name):
+                return self._error(403, "管理者已停用你的帳號")
+            acct = session.account(name)
+            acct.dir.mkdir(parents=True, exist_ok=True)
+            set_discord(acct, discord_id)
+            log("info", f"新的 Discord 帳號：{uname}", name)
+        cfg = robot.load_config(acct)
+        cfg["display"] = uname
+        robot.save_config(acct, cfg)
+        token = new_web_session(acct.name)
+        log("info", "已用 Discord 登入", acct.name)
+        return self._json({"ok": True, "account": acct.name}, headers=self._cookie_header(token, WEB_SESSION_DAYS * 86400))
 
     # --- GET ---
 
@@ -571,12 +668,16 @@ class Handler(BaseHTTPRequestHandler):
             cfg = robot.load_config(acct)
             gcfg = config.load()
             return self._json({
-                "account": acct.name, "admin": admin, "discord_id": cfg.get("discord_id", ""),
+                "account": acct.name, "display": display_name(acct), "admin": admin,
+                "discord_account": config.is_discord_account(acct.name), "school": acct.school,
+                "can_book": can_book(acct), "discord_id": cfg.get("discord_id", ""),
                 "discord_ready": bool(gcfg["discord_token"]), "school_login": acct.has_session(),
                 "login_error": acct.login_error, "has_password": credentials.load(acct.name) is not None,
                 "members": cfg.get("members", robot.DEFAULT_MEMBERS), "member_types": booker.MEMBER_TYPES,
                 "public_url": gcfg["public_url"],
-                **({"allowed": gcfg["allowed"], "admins": gcfg["admins"], "scan_account": config.scan_account()} if admin else {}),
+                **({"allowed": gcfg["allowed"], "admins": gcfg["admins"], "scan_account": config.scan_account(),
+                    "discord_users": [{"account": n, "display": display_name(session.account(n))}
+                                      for n in config.users() if config.is_discord_account(n)]} if admin else {}),
             })
         if path == "/api/venues":
             return self._json(VENUES)
@@ -611,6 +712,8 @@ class Handler(BaseHTTPRequestHandler):
         if path == "/api/history":
             return self._json({"stats": history.load_all(), "job": _history_job, "can_update": admin})
         if path == "/api/orders":
+            if not acct.school:
+                return self._json({"data": None, "running": False, "error": "連結計中帳號後才能在這裡看訂單"})
             st = orders_state(acct)
             data = st["data"]
             if data:
@@ -636,6 +739,46 @@ class Handler(BaseHTTPRequestHandler):
             if did and not (did.isdigit() and 15 <= len(did) <= 21):
                 return self._error(400, "Discord 使用者 ID 是一串 17–20 位數字")
             set_discord(acct, did)
+            return self._json({"ok": True})
+        if path == "/api/me/school":  # link a 計中 account to this account (or log in to it again)
+            school = config.normalize_account(str(body.get("account", "")))
+            password = str(body.get("password") or "")
+            if not school or not password:
+                return self._error(400, "請輸入計中帳號和密碼")
+            if acct.school and school != acct.school:
+                return self._error(400, f"你已經連結 {acct.school}，要換帳號請先取消連結")
+            other = _account_by_school(school)
+            if other and other is not acct:
+                return self._error(409, "這個計中帳號已經連到另一個預約網站帳號，請用那個帳號登入")
+            ip = self._client_ip()
+            if _too_many_fails(f"a:{school}", f"i:{ip}"):
+                return self._error(429, "失敗次數太多，請 15 分鐘後再試")
+            try:
+                acct.sso_login(password, school=school)
+            except Exception as e:
+                _add_fail(f"a:{school}", f"i:{ip}")
+                log("warn", f"連結計中帳號失敗：{_err(e)}", acct.name)
+                return self._error(401, "計中帳號登入沒有成功，請確認帳號密碼" if isinstance(e, session.NotLoggedIn)
+                                   else f"無法連到學校網站（{_err(e)}）")
+            credentials.save(acct.name, school, password if body.get("remember", True) else None)
+            log("info", f"已連結計中帳號 {school}{'' if body.get('remember', True) else '（不儲存密碼）'}", acct.name)
+            start_orders(acct)
+            return self._json({"ok": True})
+        if path == "/api/me/school/forget":  # keep the link, drop the stored password
+            if acct.school:
+                credentials.save(acct.name, acct.school, None)
+                log("info", "已刪除儲存的計中密碼", acct.name)
+            return self._json({"ok": True})
+        if path == "/api/me/school/unlink":  # Discord-login accounts only: back to alerts only
+            if not config.is_discord_account(acct.name):
+                return self._error(400, "用計中帳號登入的帳號不能取消連結；可以改成不儲存密碼")
+            if booker.busy(acct):
+                return self._error(409, "有預訂進行中，請先取消")
+            credentials.delete(acct.name)
+            acct.clear()
+            _orders.pop(acct.name, None)
+            (acct.dir / "orders.json").unlink(missing_ok=True)
+            log("info", "已取消連結計中帳號", acct.name)
             return self._json({"ok": True})
         if path == "/api/me/discord/link":  # the page opened from /link's button
             entry = _link_codes.pop(str(body.get("code") or ""), None)
@@ -785,6 +928,16 @@ class Handler(BaseHTTPRequestHandler):
         if path == "/api/orders/refresh":
             start_orders(acct)
             return self._json({"ok": True})
+        if path == "/api/admin/block" and admin:  # turn a Discord-login account away
+            name = str(body.get("account", ""))
+            if not config.is_discord_account(name):
+                return self._error(400, "只能停用 Discord 登入的帳號")
+            gcfg = config.load()
+            gcfg["blocked"] = sorted(set(gcfg["blocked"]) | {name})
+            config.save(gcfg)
+            end_web_sessions(account=name)
+            log("info", f"已停用 {name}", acct.name)
+            return self._json({"ok": True})
         if path == "/api/admin/allow" and admin:
             name = config.normalize_account(str(body.get("account", "")))
             if not name:
@@ -806,8 +959,9 @@ class Handler(BaseHTTPRequestHandler):
         current = booker.busy(acct)
         if current:
             return self._json({"error": "你已經有一筆預訂在進行中", "prep": current.id}, 409)
-        if not credentials.load(acct.name):
-            return self._error(400, "伺服器上沒有你的密碼，請登出再登入")
+        if not can_book(acct):
+            return self._error(400, "要先在「設定」連結計中帳號，伺服器才能幫你準備預訂；也可以直接到學校網站訂"
+                               if not acct.school else "學校網站的登入已過期，請在「設定」重新登入計中帳號")
         prep = start_prep(acct, venue, day, hour, quantity)
         return self._json({"ok": True, "prep": prep.id})
 

@@ -293,19 +293,27 @@
 <body>
 <div class="login" id="loginScreen" hidden>
   <h1>臺大場地預約</h1>
-  <p class="hint">用自己的計中帳號登入（只限管理者加入名單的帳號）。</p>
-  <section class="card">
+  <section class="card" id="discordLoginCard">
+    <h2 style="font-size:15px;margin:0 0 8px">用 Discord 登入</h2>
+    <p style="margin:0">在預約系統的 Discord 伺服器（或私訊 bot）輸入 <b>/login</b>，點 bot 回你的按鈕就會登入。不需要任何密碼。</p>
+    <p class="hint">登入後可以設定自己的濾網、收到空場私訊，再自己到學校網站預訂。想讓伺服器幫你填好預訂，之後可以在「設定」連結計中帳號。</p>
+    <p class="hint" id="discordLoginMsg"></p>
+  </section>
+  <details class="fold"><summary>用計中帳號登入</summary>
+  <section class="card" style="margin-top:10px">
     <form id="loginForm">
       <label class="field"><span>計中帳號</span>
         <input id="loginAccount" type="text" autocomplete="username" autocapitalize="none" spellcheck="false" placeholder="例：b12345678" required></label>
       <label class="field"><span>計中密碼</span>
         <div class="pw-wrap"><input id="loginPassword" type="password" autocomplete="current-password" required>
           <button type="button" class="ghost" id="togglePw">顯示</button></div></label>
+      <label class="switch" style="margin-bottom:12px;font-weight:400"><input type="checkbox" id="loginRemember" checked><span class="track"></span><span>讓伺服器記住密碼（加密保存）</span></label>
       <button type="submit" class="primary" id="loginGo">登入</button>
       <p class="hint" id="loginMsg"></p>
     </form>
   </section>
-  <p class="hint">登入時伺服器會真的用這組帳密登入學校的租借系統。密碼會加密存在伺服器上，讓它在學校登入過期時自動重新登入、幫你準備預訂；伺服器管理者仍有辦法讀到，請只在信任管理者時使用。隨時可以在「設定」刪除自己的所有資料。</p>
+  <p class="hint">只限管理者加入名單的計中帳號。伺服器會真的用這組帳密登入學校的租借系統。記住密碼的話，它會加密存在伺服器上，讓伺服器在學校登入過期（約 1–2 小時）時自己重新登入、幫你準備預訂；伺服器管理者仍有辦法讀到。不記住的話，伺服器只能在這段時間內幫你預訂，之後只會通知。</p>
+  </details>
 </div>
 
 <div id="app" hidden>
@@ -456,7 +464,22 @@
 <dialog class="modal" id="settings">
   <h2>設定 <button type="button" class="small ghost" id="closeSettings" aria-label="關閉">✕</button></h2>
   <p id="meLine" style="margin:0"></p>
+  <h3 class="sub">計中帳號（讓伺服器幫你預訂）</h3>
+  <p style="margin:0 0 6px" id="schoolState"></p>
   <p class="hint" id="meLoginError" style="color:var(--err)" hidden></p>
+  <form id="schoolForm" autocomplete="off">
+    <p class="hint" id="schoolHint" style="margin-top:0"></p>
+    <div class="row">
+      <label class="field"><span>計中帳號</span><input id="schoolAccount" type="text" autocapitalize="none" spellcheck="false" placeholder="例：b12345678"></label>
+      <label class="field"><span>計中密碼</span><input id="schoolPassword" type="password" autocomplete="off"></label>
+    </div>
+    <label class="switch" style="margin-bottom:10px;font-weight:400"><input type="checkbox" id="schoolRemember" checked><span class="track"></span><span>讓伺服器記住密碼（加密保存）</span></label>
+    <div class="actions"><button type="submit" class="primary" id="schoolGo">連結</button></div>
+  </form>
+  <div class="actions" id="schoolActions" style="margin-top:8px">
+    <button type="button" class="small" id="schoolForget">刪除儲存的密碼</button>
+    <button type="button" class="small danger" id="schoolUnlink">取消連結計中帳號</button>
+  </div>
   <h3 class="sub">Discord 通知</h3>
   <p style="margin:0 0 6px" id="discordState"></p>
   <p class="hint" id="discordHint">在 Discord 對 bot 輸入 <b>/link</b>（私訊 bot，或在 bot 所在的伺服器裡），點它回的按鈕就會連結到這個帳號。要停止通知就輸入 <b>/unlink</b>。bot 只能私訊和它在同一個 Discord 伺服器的人。</p>
@@ -475,6 +498,8 @@
     <div class="actions"><input id="allowAdd" type="text" class="compact" placeholder="計中帳號" autocapitalize="none">
       <button type="button" class="small" id="allowAddBtn">加入</button></div>
     <p class="hint" id="adminHint"></p>
+    <h3 class="sub">用 Discord 登入的人</h3>
+    <div class="admin-list" id="discordUsers"></div>
   </div>
   <h3 class="sub">帳號</h3>
   <div class="actions">
@@ -490,8 +515,9 @@
   <label class="field"><span>面數</span>
     <input id="bookQty" type="number" min="1" value="1"></label>
   <p class="hint members-line" id="bookMembers"></p>
-  <div class="actions"><button type="button" class="primary" id="bookGo">準備預訂</button></div>
-  <p class="hint">伺服器會幫你填到學校的確認頁，你看過內容再按「確認送出」才會真的下單；繳費請自己到學校網站。</p>
+  <div class="actions"><button type="button" class="primary" id="bookGo">準備預訂</button>
+    <a class="btnlink" id="bookSchool" target="_blank" rel="noopener">到學校網站預訂</a></div>
+  <p class="hint" id="bookHint">伺服器會幫你填到學校的確認頁，你看過內容再按「確認送出」才會真的下單；繳費請自己到學校網站。</p>
 </dialog>
 
 <div class="toast" id="toast"></div>
@@ -548,12 +574,27 @@ async function loadMe() {
 }
 
 function renderMe() {
-  $("acctPill").textContent = me.account + (me.admin ? "（管理者）" : "");
+  $("acctPill").textContent = me.display + (me.admin ? "（管理者）" : "");
   const pill = $("sessionPill");
-  if (me.school_login) { pill.className = "pill ok"; pill.textContent = "學校網站已登入"; }
+  if (!me.school) { pill.className = "pill info"; pill.textContent = "只通知"; pill.title = "連結計中帳號後，伺服器才能幫你預訂"; }
+  else if (me.school_login) { pill.className = "pill ok"; pill.textContent = "學校網站已登入"; pill.title = ""; }
   else if (me.login_error) { pill.className = "pill err"; pill.textContent = "學校網站登入失敗"; pill.title = me.login_error; }
-  else { pill.className = "pill warn"; pill.textContent = "學校網站未登入（需要時會自動登入）"; }
-  $("meLine").innerHTML = `計中帳號 <b>${escapeHtml(me.account)}</b>${me.admin ? "（管理者）" : ""}`;
+  else if (me.has_password) { pill.className = "pill warn"; pill.textContent = "學校網站未登入（需要時會自動登入）"; pill.title = ""; }
+  else { pill.className = "pill warn"; pill.textContent = "學校登入已過期（只通知）"; pill.title = "沒有儲存密碼，請在設定重新登入計中帳號"; }
+  $("meLine").innerHTML = `${me.discord_account ? "Discord 帳號" : "計中帳號"} <b>${escapeHtml(me.display)}</b>${me.admin ? "（管理者）" : ""}`;
+  $("schoolState").innerHTML = !me.school ? '<span class="pill info">還沒連結：只收通知，自己到學校網站訂</span>'
+    : `<span class="pill ok">已連結 ${escapeHtml(me.school)}</span> ${me.has_password ? '<span class="pill ok">伺服器記住密碼</span>' : '<span class="pill warn">沒有儲存密碼</span>'}`;
+  $("schoolHint").textContent = !me.school ? "連結後，找到空位時伺服器可以先幫你填到學校確認頁，你只要按確認送出；也能在這裡看訂單。"
+    : me.has_password ? "要換密碼或重新登入學校網站，在這裡再輸入一次。" : "沒有儲存密碼：學校登入約 1–2 小時就會過期，過期後在這裡再登入一次。";
+  if (document.activeElement !== $("schoolAccount")) $("schoolAccount").value = me.school || "";
+  $("schoolAccount").readOnly = !!me.school;
+  $("schoolGo").textContent = me.school ? "重新登入" : "連結";
+  $("schoolActions").hidden = !me.school;
+  $("schoolForget").hidden = !me.has_password;
+  $("schoolUnlink").hidden = !me.discord_account;
+  $("watchAuto").disabled = !me.can_book;
+  $("watchAuto").closest("label").title = me.can_book ? "找到空位時，伺服器先填到學校確認頁，你只要按確認送出"
+    : "連結計中帳號（並讓伺服器記住密碼）後才能用";
   $("meLoginError").hidden = !me.login_error;
   $("meLoginError").textContent = me.login_error || "";
   if (document.activeElement !== $("discordId")) $("discordId").value = me.discord_id || "";
@@ -565,6 +606,8 @@ function renderMe() {
     $("allowList").innerHTML = [...new Set([...me.admins, ...me.allowed])].map((a) => `<span class="tag">${escapeHtml(a)}${
       me.admins.includes(a) ? "（管理者）" : `<button type="button" class="small ghost" data-deny="${escapeHtml(a)}" aria-label="移除">✕</button>`}</span>`).join("");
     $("adminHint").textContent = `掃描帳號：${me.scan_account || "未設定"}・公開網址：${me.public_url || "未設定"}`;
+    $("discordUsers").innerHTML = me.discord_users.map((u) => `<span class="tag">${escapeHtml(u.display)}<button type="button" class="small ghost" data-block="${escapeHtml(u.account)}" aria-label="停用">✕</button></span>`).join("")
+      || '<span class="hint">還沒有</span>';
   }
 }
 
@@ -585,7 +628,7 @@ $("loginForm").onsubmit = async (e) => {
   $("loginGo").textContent = "登入中（約 10 秒）…";
   $("loginMsg").textContent = "";
   try {
-    await api("/api/login", { method: "POST", body: JSON.stringify({ account: $("loginAccount").value, password: $("loginPassword").value }) });
+    await api("/api/login", { method: "POST", body: JSON.stringify({ account: $("loginAccount").value, password: $("loginPassword").value, remember: $("loginRemember").checked }) });
     $("loginPassword").value = "";
     start();
   } catch (err) {
@@ -596,6 +639,39 @@ $("loginForm").onsubmit = async (e) => {
     $("loginGo").textContent = "登入";
   }
 };
+
+$("schoolForm").onsubmit = async (e) => {
+  e.preventDefault();
+  $("schoolGo").disabled = true;
+  const label = $("schoolGo").textContent;
+  $("schoolGo").textContent = "登入學校網站中（約 10 秒）…";
+  try {
+    await api("/api/me/school", { method: "POST", body: JSON.stringify({
+      account: $("schoolAccount").value, password: $("schoolPassword").value, remember: $("schoolRemember").checked }) });
+    $("schoolPassword").value = "";
+    await loadMe();
+    toast("已連結計中帳號");
+  } catch (err) { if (!(err instanceof LoggedOut)) toast(err.message, true); }
+  finally { $("schoolGo").disabled = false; $("schoolGo").textContent = label; }
+};
+$("schoolForget").onclick = guard(async () => {
+  if (!confirm("刪除伺服器上儲存的計中密碼？之後學校登入過期時，伺服器就不能自己重新登入。")) return;
+  await api("/api/me/school/forget", { method: "POST" });
+  await loadMe();
+  toast("已刪除儲存的密碼");
+});
+$("schoolUnlink").onclick = guard(async () => {
+  if (!confirm("取消連結計中帳號？伺服器會刪掉你的學校登入和密碼，之後只會通知空場。")) return;
+  await api("/api/me/school/unlink", { method: "POST" });
+  await loadMe();
+  toast("已取消連結");
+});
+$("discordUsers").onclick = guard(async (e) => {
+  const a = e.target.dataset.block;
+  if (!a || !confirm("停用這個 Discord 帳號？他會被登出，也不能再用 /login。")) return;
+  await api("/api/admin/block", { method: "POST", body: JSON.stringify({ account: a }) });
+  await loadMe();
+});
 
 $("logoutBtn").onclick = guard(async () => {
   await api("/api/logout", { method: "POST" });
@@ -794,7 +870,8 @@ function renderHits() {
       ${h.status === "available" ? `<label class="want">預訂
         <input type="number" min="1" max="${h.count}" value="${Math.min(h.want || 1, h.count)}" data-want="${h.id}" ${busy ? "disabled" : ""}>
         面</label>
-        <button type="button" class="small primary" data-book="${h.id}" ${busy ? "disabled" : ""}>準備預訂</button>` : ""}
+        ${me && me.can_book ? `<button type="button" class="small primary" data-book="${h.id}" ${busy ? "disabled" : ""}>準備預訂</button>`
+          : `<a class="btnlink primary" href="${schoolUrl(h.venue)}" target="_blank" rel="noopener">到學校網站訂</a>`}` : ""}
       <button type="button" class="small ghost" data-dismiss="${h.id}" title="從清單移除">✕</button>
       </span>
     </div>`).join("") : '<div class="empty">目前沒有符合濾網的空位</div>';
@@ -1214,8 +1291,9 @@ $("avail").addEventListener("pointerover", (e) => {
 $("avail").addEventListener("pointerleave", () => ($("availTip").hidden = true));
 
 let bookTarget = null; // { day, h } of the slot in the booking dialog
+const schoolUrl = (venue) => `https://rent.pe.ntu.edu.tw/order/?Add=${encodeURIComponent(venue)}`;
 function openBook(day, h) {
-  if (activePrep()) { toast("你已經有一筆預訂在進行中，請先確認或取消它", true); return; }
+  if (me.can_book && activePrep()) { toast("你已經有一筆預訂在進行中，請先確認或取消它", true); return; }
   const c = availCell(day, h);
   if (!c.open.length) return;
   bookTarget = { day, h };
@@ -1224,6 +1302,11 @@ function openBook(day, h) {
   $("bookQty").value = "1";
   syncBookQty();
   $("bookMembers").innerHTML = `${membersText()} <button type="button" class="small ghost" data-open-settings>修改</button>`;
+  $("bookGo").hidden = !me.can_book;
+  $("bookQty").closest("label").hidden = $("bookMembers").hidden = !me.can_book;
+  $("bookHint").textContent = me.can_book ? "伺服器會幫你填到學校的確認頁，你看過內容再按「確認送出」才會真的下單；繳費請自己到學校網站。"
+    : "在學校網站登入後選這個時段預訂。想讓伺服器幫你填好，請到「設定」連結計中帳號。";
+  $("bookSchool").href = schoolUrl($("bookVenue").value);
   $("availTip").hidden = true;
   $("bookDialog").showModal();
 }
@@ -1232,7 +1315,7 @@ function syncBookQty() {
   $("bookQty").max = n;
   if (Number($("bookQty").value) > n) $("bookQty").value = String(n);
 }
-$("bookVenue").onchange = syncBookQty;
+$("bookVenue").onchange = () => { syncBookQty(); $("bookSchool").href = schoolUrl($("bookVenue").value); };
 $("closeBook").onclick = () => $("bookDialog").close();
 $("bookGo").onclick = guard(async () => {
   const qty = Math.round(Number($("bookQty").value)), max = Number($("bookQty").max);
@@ -1396,7 +1479,7 @@ async function refreshOrders() {
 }
 
 function maybeRefreshOrders() {
-  if (orders.running) return;
+  if (orders.running || !me || !me.school) return;
   if (!orders.data || Date.now() - new Date(orders.data.fetched) > ORDERS_MAX_AGE_MIN * 60000) refreshOrders();
 }
 
@@ -1571,6 +1654,12 @@ window.addEventListener("hashchange", followHash);
 /* ---------- init ---------- */
 let started = false;
 async function start() {
+  const m = location.hash.match(/^#login\/(.+)$/);
+  if (m) {
+    history.replaceState(null, "", location.pathname); // the code works once
+    try { await api("/api/login/discord", { method: "POST", body: JSON.stringify({ code: m[1] }) }); }
+    catch (err) { $("discordLoginMsg").textContent = err.message; $("discordLoginMsg").style.color = "var(--err)"; }
+  }
   try { await loadMe(); } catch (err) { if (!(err instanceof LoggedOut)) toast(err.message, true); return; }
   $("loginScreen").hidden = true;
   $("app").hidden = false;
