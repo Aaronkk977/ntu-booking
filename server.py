@@ -91,8 +91,20 @@ def display_name(acct: session.Account) -> str:
     return robot.load_config(acct).get("display") or acct.school or acct.name
 
 
+WEEKDAYS = "一二三四五六日"
+
+
+def day_label(day: str) -> str:
+    """'2026-11-18' -> '11/18（三）', the way people read it in a message."""
+    try:
+        d = date.fromisoformat(day[:10])
+    except ValueError:
+        return day
+    return f"{d.month}/{d.day}（{WEEKDAYS[d.weekday()]}）{day[10:]}"
+
+
 def slot_label(venue: str, day: str, hour: int) -> str:
-    return f"{VENUE_NAMES.get(venue, venue)} {day} {hour:02d}:00–{hour + 1:02d}:00"
+    return f"{VENUE_NAMES.get(venue, venue)} {day_label(day)} {hour:02d}:00–{hour + 1:02d}:00"
 
 
 def _discord_id(acct: session.Account) -> str:
@@ -211,8 +223,8 @@ def _deadline_reminders(acct: session.Account, data: dict) -> None:
     new = [o for o in data["orders"] if o["kind"] == "unpaid" and o["deadline"] and o["id"] not in told
            and date.fromisoformat(o["deadline"][:10]) <= soon and any(s["date"] >= date.today().isoformat() for s in o["slots"])]
     for o in new:
-        when = "、".join(f"{s['date']} {s['start']}" for s in o["slots"])
-        notify.send(_discord_id(acct), f"⏰ 繳費期限快到了：{o['venue']} {when}，截止 {o['deadline']}，金額 {o['amount']}",
+        when = "、".join(f"{day_label(s['date'])} {s['start']}" for s in o["slots"])
+        notify.send(_discord_id(acct), f"⏰ 繳費期限快到了：{o['venue']} {when}，截止 {day_label(o['deadline'])}，金額 {o['amount']}",
                     ("打開訂單", notify.url("#orders")))
     if new:
         cfg["deadline_told"] = sorted(told | {o["id"] for o in new})[-50:]
