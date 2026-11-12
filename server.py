@@ -354,16 +354,16 @@ _auto_lock = threading.Lock()
 
 def _record_auto(prep: booker.Prep) -> None:
     """Count the courts an auto prep booked against the day's limit (once, when it finishes)."""
-    if not prep.auto or prep.by_tap or getattr(prep, "_counted", False):
-        return
-    prep._counted = True
-    if prep.booked:
-        with _auto_lock:
+    with _auto_lock:
+        if not prep.auto or prep.by_tap or getattr(prep, "_counted", False):
+            return
+        if prep.booked:
             cfg = robot.load_config(prep.acct)
             log_ = [e for e in cfg.get("auto_booked", []) if e["date"] >= (date.today() - timedelta(days=7)).isoformat()]
             log_.append({"date": date.today().isoformat(), "courts": len(prep.booked), "label": prep.label})
             cfg["auto_booked"] = log_
             robot.save_config(prep.acct, cfg)
+        prep._counted = True  # only once it is in the log, so auto_left never sees it in neither place
 
 
 def auto_left(acct: session.Account) -> int:
