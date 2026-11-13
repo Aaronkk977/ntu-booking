@@ -88,6 +88,8 @@
   button.icon-btn { display: inline-flex; align-items: center; justify-content: center; padding: 6px 8px; line-height: 0; }
   button:disabled { opacity: .5; cursor: not-allowed; }
   .actions input { width: auto; flex: 1; min-width: 0; padding: 7px 10px; } /* as tall as the button beside it */
+  .badge { display: inline-block; min-width: 18px; padding: 0 5px; border-radius: 999px; background: var(--warn); color: #fff; font-size: 11px; font-weight: 700; line-height: 18px; text-align: center; }
+  .tab.urgent .badge { background: var(--err); }
   .contents { display: contents; } .contents[hidden] { display: none; }
   .actions { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
   a { color: var(--accent); }
@@ -321,10 +323,9 @@
     <h2 style="font-size:15px;margin:0 0 10px">登入</h2>
     <div class="big" style="display:grid;gap:8px">
       <button type="button" class="primary" id="oauthGo" hidden>用 Discord 登入</button>
-      <button type="button" id="guestGo">先逛逛（訪客，不用登入）</button>
+      <button type="button" id="guestGo">先逛逛（訪客）</button>
     </div>
-    <p class="hint" id="oauthHint">也可以在預約系統的 Discord 伺服器（或私訊 bot）輸入 <b>/login</b>，點 bot 回你的按鈕登入。不需要任何密碼。</p>
-    <p class="hint">登入後可以設定自己的濾網、收到空場私訊；在「設定」連結計中帳號後，伺服器還能幫你訂。訪客只能看空位和熱門度。</p>
+    <p class="hint" id="oauthHint">或在 Discord 打 <b>/login</b></p>
     <p class="hint" id="discordLoginMsg"></p>
   </section>
   <details class="fold"><summary>用計中帳號登入</summary>
@@ -340,7 +341,7 @@
       <p class="hint" id="loginMsg"></p>
     </form>
   </section>
-  <p class="hint">只限管理者加入名單的計中帳號。伺服器會真的用這組帳密登入學校的租借系統。記住密碼的話，它會加密存在伺服器上，讓伺服器在學校登入過期（約 1–2 小時）時自己重新登入、幫你預訂；伺服器管理者仍有辦法讀到。不記住的話，伺服器只能在這段時間內幫你預訂，之後只會通知。</p>
+  <p class="hint">限管理者名單內的帳號。密碼加密存在伺服器上，讓伺服器能自動重新登入學校網站。</p>
   </details>
 </div>
 
@@ -369,7 +370,7 @@
         <div class="group"><span class="label">場地</span><span id="searchVenues" class="group"></span></div>
         <button type="button" class="small primary" id="searchBtn">搜尋</button>
         <button type="button" class="small" id="searchForce" title="不使用快取，重新向網站抓取">重新抓取</button>
-        <span class="hint guest-only" style="margin:0">訪客看到的是大家最近一次搜尋的結果；登入後才能自己搜尋、設定通知。</span>
+        <span class="hint guest-only" style="margin:0">訪客只能看最近的結果</span>
       </div>
       <div class="toolbar" id="searchViewBar" hidden>
         <div class="group"><span class="label">顯示</span><span id="searchView" class="group"></span></div>
@@ -380,17 +381,15 @@
         <div class="tip" id="availTip" hidden></div>
       </div>
       <div class="legend">
-        <span><i class="sw" style="background:var(--ok)"></i>線上可租（幾面）</span>
-        <span><i class="sw" style="background:var(--warn-soft);border:1px solid var(--warn)"></i>僅限現場租借（幾面）</span>
-        <span><i></i>已滿或不開放</span>
-        <span><i class="closed"></i>不開放租借</span>
-        <span>點綠色格子可預訂</span>
+        <span><i class="sw" style="background:var(--ok)"></i>線上可訂</span>
+        <span><i class="sw" style="background:var(--warn-soft);border:1px solid var(--warn)"></i>只能現場</span>
+        <span><i></i>已滿</span>
+        <span><i class="closed"></i>不開放</span>
       </div>
       <details class="fold"><summary id="availSummary">時段清單</summary><div class="hot-list" id="availList"></div></details>
     </div>
 
     <div class="tabpanel" id="panel-filter" hidden>
-    <p class="hint tab-hint">已啟用的濾網會定期掃描（大家共用一次掃描），符合的線上空位會加入你的清單並用 Discord 通知你；開了「找到就先準備」的濾網會直接幫你填到學校確認頁。</p>
 
     <div class="scanbar">
       <span><span class="k">狀態</span> <span class="v" id="robotStatus">—</span></span>
@@ -403,7 +402,7 @@
       </span>
     </div>
 
-    <h3 class="sub">自動加入的清單 <span class="count" id="hitCount"></span>
+    <h3 class="sub">找到的空位 <span class="count" id="hitCount"></span>
       <button type="button" class="small ghost right" id="clearGone">清除已失效</button></h3>
     <p class="hint members-line" id="membersLine"></p>
     <div class="hits" id="hits"></div>
@@ -417,7 +416,7 @@
         <div class="group"><span class="label">名稱</span><input id="fName" type="text" class="compact" maxlength="30"></div>
         <label class="switch"><input type="checkbox" id="watchEnabled"><span class="track"></span><span id="watchLabel">已停用</span></label>
         <div class="group"><span class="label">找到時</span><select id="watchMode" class="compact">
-          <option value="notify">通知我（按預訂才訂）</option>
+          <option value="notify">通知我</option>
           <option value="auto">直接訂</option></select></div>
         <button type="button" class="small danger icon-btn" id="fDelete" title="刪除濾網" aria-label="刪除濾網"><svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 6h18"/><path d="M8 6V4a1 1 0 0 1 1-1h6a1 1 0 0 1 1 1v2"/><path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/><path d="M10 11v6M14 11v6"/></svg></button>
       </div>
@@ -432,16 +431,13 @@
       </div>
       <div class="grid-wrap split"><table class="week" id="week"></table></div>
       <div class="legend">
-        <span><i class="sel"></i>這個濾網的時段</span>
-        <span><i class="open"></i>目前線上有空（幾面）</span>
-        <span><i></i>未選</span>
-        <span>藍色日期＝可線上申請</span>
+        <span><i class="sel"></i>已選</span>
+        <span><i class="open"></i>現在有空</span>
       </div>
     </div>
     <div class="empty" id="filterEmpty" hidden>還沒有濾網，按「＋ 新增濾網」</div>
     </div>
     <div class="tabpanel" id="panel-heat" hidden>
-      <p class="hint tab-hint">百分比＝過去被訂走的比例，顏色越深越難訂。</p>
       <p class="hint tab-hint" id="heatFilterHint"></p>
       <div class="toolbar">
         <div class="group"><span class="label">場地</span><select id="heatVenue" class="compact"></select></div>
@@ -457,7 +453,6 @@
       <details class="fold"><summary>最難訂／最好訂排行</summary><div class="hot-list" id="hotList"></div></details>
     </div>
     <div class="tabpanel" id="panel-orders" hidden>
-      <p class="hint tab-hint">學校網站「常租紀錄」裡的訂單。「線上付款」會開學校的付款頁，第一次要在手機上用計中帳號登入學校網站。</p>
       <div class="toolbar">
         <button type="button" class="small" id="ordersRefresh">重新整理</button>
         <span class="hint" id="ordersMeta" style="margin:0"></span>
@@ -487,8 +482,8 @@
 <dialog class="modal" id="settings">
   <h2>設定 <button type="button" class="small ghost" id="closeSettings" aria-label="關閉">✕</button></h2>
   <p id="meLine" style="margin:0"></p>
-  <p class="hint" id="homeLine" hidden>想放到手機主畫面：打開 <a id="homeLink" target="_blank" rel="noopener">這個固定網址</a>，照著做「加入主畫面」。之後網址換了也能直接打開。</p>
-  <h3 class="sub">計中帳號（讓伺服器幫你預訂）</h3>
+  <p id="homeLine" hidden style="margin:8px 0 0"><a class="small btnlink" id="homeLink" target="_blank" rel="noopener">加到手機主畫面</a></p>
+  <h3 class="sub">計中帳號</h3>
   <p style="margin:0 0 6px" id="schoolState"></p>
   <p class="hint" id="meLoginError" style="color:var(--err)" hidden></p>
   <form id="schoolForm" autocomplete="off">
@@ -506,7 +501,7 @@
   </form>
   <h3 class="sub">Discord 通知</h3>
   <p style="margin:0 0 6px" id="discordState"></p>
-  <p class="hint" id="discordHint">在 Discord 對 bot 輸入 <b>/link</b>（私訊 bot，或在 bot 所在的伺服器裡），點它回的按鈕就會連結到這個帳號。要停止通知就輸入 <b>/unlink</b>。bot 只能私訊和它在同一個 Discord 伺服器的人。</p>
+  <p class="hint" id="discordHint">在 Discord 打 <b>/link</b> 連結，<b>/unlink</b> 取消</p>
   <div class="actions"><button type="button" id="discordTest">傳測試訊息</button></div>
   <details class="fold"><summary>改用手動輸入使用者 ID</summary>
     <label class="field" style="margin-top:10px"><span>Discord 使用者 ID（開發者模式 → 在自己頭像按右鍵 →「複製使用者 ID」）</span>
@@ -545,7 +540,7 @@
   <p class="hint members-line" id="bookMembers"></p>
   <div class="actions"><button type="button" class="primary" id="bookGo">預訂</button>
     <a class="btnlink" id="bookSchool" target="_blank" rel="noopener">到學校網站預訂</a></div>
-  <p class="hint" id="bookHint">按「預訂」就直接下單；訂到後請在期限內繳費，不要的話到「訂單」取消。</p>
+  <p class="hint" id="bookHint" hidden></p>
 </dialog>
 
 <div class="toast" id="toast"></div>
@@ -620,13 +615,13 @@ function renderMe() {
   if (!me.school) { pill.className = "pill info"; pill.textContent = "只通知"; pill.title = "連結計中帳號後，伺服器才能幫你預訂"; }
   else if (me.school_login) { pill.className = "pill ok"; pill.textContent = "學校網站已登入"; pill.title = ""; }
   else if (me.login_error) { pill.className = "pill err"; pill.textContent = "學校網站登入失敗"; pill.title = me.login_error; }
-  else if (me.has_password) { pill.className = "pill warn"; pill.textContent = "學校網站未登入（需要時會自動登入）"; pill.title = ""; }
-  else { pill.className = "pill warn"; pill.textContent = "學校登入已過期（只通知）"; pill.title = "沒有儲存密碼，請在設定重新登入計中帳號"; }
+  else if (me.has_password) { pill.className = "pill warn"; pill.textContent = "學校網站未登入"; pill.title = ""; }
+  else { pill.className = "pill warn"; pill.textContent = "學校登入已過期"; pill.title = "沒有儲存密碼，請在設定重新登入計中帳號"; }
   $("meLine").innerHTML = `${me.discord_account ? "Discord 帳號" : "計中帳號"} <b>${escapeHtml(me.display)}</b>${me.admin ? "（管理者）" : ""}`;
-  $("schoolState").innerHTML = !me.school ? '<span class="pill info">還沒連結：只收通知，自己到學校網站訂</span>'
+  $("schoolState").innerHTML = !me.school ? '<span class="pill info">還沒連結</span>'
     : `<span class="pill ok">已連結 ${escapeHtml(me.school)}</span> ${me.has_password ? '<span class="pill ok">伺服器記住密碼</span>' : '<span class="pill warn">沒有儲存密碼</span>'}`;
-  $("schoolHint").textContent = !me.school ? "連結後，伺服器可以幫你訂：按通知裡的「預訂」，或讓濾網找到就直接訂；也能在這裡看訂單、取消訂單。"
-    : me.has_password ? "要換密碼或重新登入學校網站，在這裡再輸入一次。" : "沒有儲存密碼：學校登入約 1–2 小時就會過期，過期後在這裡再登入一次。";
+  $("schoolHint").textContent = !me.school ? "連結後伺服器才能幫你訂、看訂單" : me.has_password ? "" : "沒存密碼：學校登入 1–2 小時後會過期";
+  $("schoolHint").hidden = !$("schoolHint").textContent;
   if (document.activeElement !== $("schoolAccount")) $("schoolAccount").value = me.school || "";
   $("schoolAccount").readOnly = !!me.school;
   $("schoolGo").textContent = me.school ? "重新登入" : "連結";
@@ -640,7 +635,7 @@ function renderMe() {
   if (document.activeElement !== $("discordId")) $("discordId").value = me.discord_id || "";
   $("discordTest").disabled = !me.discord_id || !me.discord_ready;
   $("discordState").innerHTML = me.discord_id ? '<span class="pill ok">已連結 Discord</span>' : '<span class="pill warn">還沒連結 Discord</span>';
-  if (!me.discord_ready) $("discordHint").textContent = "伺服器還沒設定 Discord bot，請管理者執行 manage.py set-discord-token。";
+  if (!me.discord_ready) $("discordHint").textContent = "伺服器還沒設定 Discord bot";
   $("homeLine").hidden = !me.home_url;
   if (me.home_url) $("homeLink").href = me.home_url + "?add";
   $("adminBox").hidden = !me.admin;
@@ -880,7 +875,7 @@ function renderRobotState() {
   $("scanBtn").hidden = !r.can_set_interval;
   $("robotStatus").textContent = st.running
     ? `掃描中 ${vShort(st.venue || "")} ${st.done || 0}/${st.total || "?"}`
-    : st.next_scan ? `運作中（你有 ${active} 個濾網啟用）` : "待命（沒有人啟用濾網）";
+    : st.next_scan ? `運作中・${active} 個濾網` : "待命";
   $("lastScan").textContent = ageText(st.last_scan);
   const left = st.next_scan ? new Date(st.next_scan) - new Date() : 0;
   $("nextScan").textContent = !st.next_scan ? "—"
@@ -901,20 +896,20 @@ function renderHits() {
   const busy = !!activePrep();
   $("hits").innerHTML = sorted.length ? sorted.map((h) => `
     <div class="hit ${h.status}" id="hit-${h.id}">
-      <span class="pill ${h.status === "available" ? "ok" : "warn"}">${h.status === "available" ? "可訂" : "售罄"}</span>
+      ${h.status === "available" ? "" : '<span class="pill warn">售罄</span>'}
       <b>${fmtDate(h.date)} ${timeRange(h.hour, 1)}</b>
       <span>${venueName(h.venue)}${h.status === "available" ? `・線上 ${h.count} 面` : ""}</span>
       ${(h.filters || []).map((fid) => `<span class="tag">${escapeHtml(filterName(fid))}</span>`).join("")}
       <span class="when">${h.status === "available" ? `${ageText(h.first_seen)}發現` : `${ageText(h.gone_at)}失效`}</span>
       <span class="acts">
-      ${h.status === "available" ? `<label class="want">預訂
+      ${h.status === "available" ? `<label class="want">
         <input type="number" min="1" max="${h.count}" value="${Math.min(h.want || 1, h.count)}" data-want="${h.id}" ${busy ? "disabled" : ""}>
         面</label>
         ${me && me.can_book ? `<button type="button" class="small primary" data-book="${h.id}" ${busy ? "disabled" : ""}>預訂</button>`
           : `<a class="small btnlink primary" href="${schoolUrl(h.venue)}" target="_blank" rel="noopener">到學校網站訂</a>`}` : ""}
       <button type="button" class="small ghost" data-dismiss="${h.id}" title="從清單移除">✕</button>
       </span>
-    </div>`).join("") : '<div class="empty">目前沒有符合濾網的空位</div>';
+    </div>`).join("") : '<div class="empty">還沒有</div>';
 }
 
 $("week").addEventListener("pointerdown", (e) => {
@@ -984,10 +979,8 @@ $("watchVenues").onchange = () => {
 $("fName").oninput = () => { watch.name = $("fName").value; saveWatch(); };
 function renderModeHint() {
   const mode = $("watchMode").value, d = robotData;
-  $("watchModeHint").textContent = {
-    notify: "找到空位私訊通知你，每個時段附一顆「預訂」按鈕，按了就直接訂。",
-    auto: `找到空位就直接訂，不再問你；每天最多 ${d.auto_limit ?? 3} 面（今天還剩 ${d.auto_left ?? "?"} 面），超過就改成通知你自己按「預訂」。訂到後記得繳費，不要的話用訊息裡的「取消訂單」。`,
-  }[mode];
+  $("watchModeHint").textContent = mode === "auto" ? `每天最多 ${d.auto_limit ?? 3} 面，今天還剩 ${d.auto_left ?? "?"} 面` : "";
+  $("watchModeHint").hidden = mode !== "auto";
 }
 $("watchMode").onchange = () => {
   const mode = $("watchMode").value;
@@ -1371,8 +1364,8 @@ function openBook(day, h) {
   $("bookMembers").innerHTML = `${membersText()} <button type="button" class="small ghost" data-open-settings>修改</button>`;
   $("bookGo").hidden = !me.can_book;
   $("bookQty").closest("label").hidden = $("bookMembers").hidden = !me.can_book;
-  $("bookHint").textContent = me.can_book ? "按「預訂」就直接下單；訂到後請在期限內繳費，不要的話到「訂單」取消。"
-    : "在學校網站登入後選這個時段預訂。想讓伺服器幫你填好，請到「設定」連結計中帳號。";
+  $("bookHint").textContent = me.can_book ? "" : "連結計中帳號後，可以直接在這裡訂";
+  $("bookHint").hidden = me.can_book;
   $("bookSchool").href = schoolUrl($("bookVenue").value);
   $("availTip").hidden = true;
   $("bookDialog").showModal();
@@ -1487,14 +1480,13 @@ function orderRow(o) {
     note = `<span class="when" style="margin-left:0">${escapeHtml(o.payment_note)}</span>`;
   }
   return `<div class="hit ${o.kind}">
-    <span class="pill ${pill[0]}">${escapeHtml(pill[1])}</span>
+    ${o.kind === "cancelled" ? `<span class="pill">${escapeHtml(pill[1])}</span>` : ""}
     <b>${slots}</b>
     <span>${escapeHtml(o.venue)}・${escapeHtml(o.amount)}</span>
     ${note}
-    <span class="tag">${escapeHtml(o.order_no)}</span>
     <span class="acts" style="margin-left:auto">
       ${o.kind === "unpaid" && o.can_pay ? `<a class="small primary btnlink" href="${o.pay_url}" target="_blank" rel="noopener">線上付款</a>` : ""}
-      <a class="small btnlink" href="${o.detail_url}" target="_blank" rel="noopener">詳細內容</a>
+      <a class="small btnlink" href="${o.detail_url}" target="_blank" rel="noopener">詳細</a>
       ${o.kind !== "cancelled" && o.can_cancel !== false && o.slots.some((t) => t.date >= ymd(new Date()))
         ? `<button type="button" class="small danger" data-cancel-order="${o.id}">取消訂單</button>` : ""}
     </span>
@@ -1531,10 +1523,10 @@ function renderOrders() {
   // The label turns red once a payment deadline is a day away (or today, or already past).
   const urgent = unpaid.filter((o) => o.deadline && daysUntil(o.deadline) <= 1);
   const soonest = Math.min(...urgent.map((o) => daysUntil(o.deadline)));
+  // A count badge instead of a sentence, so the tab label stays on one line; the details are in the tooltip.
   const when = soonest < 0 ? "已過繳費期限" : soonest === 0 ? "今天截止" : "明天截止";
-  $("ordersTab").textContent = urgent.length === 1 ? `訂單管理（1 筆${when}）`
-    : urgent.length ? `訂單管理（${urgent.length} 筆即將截止）`
-    : unpaid.length ? `訂單管理（${unpaid.length} 筆待繳費）` : "訂單管理";
+  $("ordersTab").innerHTML = unpaid.length ? `訂單管理 <span class="badge">${unpaid.length}</span>` : "訂單管理";
+  $("ordersTab").title = urgent.length ? `${urgent.length} 筆${when}` : unpaid.length ? `${unpaid.length} 筆待繳費` : "";
   $("ordersTab").classList.toggle("urgent", urgent.length > 0);
   $("ordersRefresh").disabled = orders.running;
   $("ordersRefresh").textContent = orders.running ? "讀取中…" : "重新整理";
@@ -1589,11 +1581,10 @@ const heatBin = (rate) => HEAT_BINS.findIndex(([lo, hi]) => rate >= lo && rate <
 // The heatmap is per venue but a filter's hours apply to all of its venues, so say which ones.
 function renderHeatFilterHint(venue) {
   const hint = $("heatFilterHint");
-  if (!watch.id) { hint.textContent = "建立濾網後，點格子可加入時段。"; return; }
-  const scope = watch.venues.length ? watch.venues.map(vShort).join("、") : "還沒選場地";
-  hint.innerHTML = `點格子加入／移出濾網「<b>${escapeHtml(watch.name)}</b>」（${escapeHtml(scope)}）` +
-    (watch.venues.includes(venue) ? ""
-      : `<br><span style="color:var(--warn)">⚠ 濾網不含「${escapeHtml(vShort(venue))}」</span>`);
+  hint.hidden = !watch.id;
+  if (!watch.id) return;
+  hint.innerHTML = `點格子加到濾網「${escapeHtml(watch.name)}」` +
+    (watch.venues.includes(venue) ? "" : `<span style="color:var(--warn)">（不含${escapeHtml(vShort(venue))}）</span>`);
 }
 
 function renderHeat() {
@@ -1647,7 +1638,7 @@ function heatTip(td) {
     <div class="r"><span>有開放沒人訂</span><span>${k.expired} 面次</span></div>
     <div class="r"><span>課程／活動／假日</span><span>${other} 面次</span></div>
     ${k.n && k.n < FEW ? '<div class="r"><span>樣本少，僅供參考</span><span></span></div>' : ""}
-    <div class="r"><span>${isSel(String(wd), h) ? "點擊移出機器人預訂" : "點擊加入機器人預訂"}</span><span></span></div>`;
+    <div class="r"><span>${isSel(String(wd), h) ? "點擊移出濾網" : "點擊加入濾網"}</span><span></span></div>`;
   placeTip(tip, td);
 }
 
