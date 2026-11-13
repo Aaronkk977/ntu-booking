@@ -342,7 +342,7 @@
   <span class="spacer"></span>
   <span id="acctPill" class="pill info"></span>
   <span id="sessionPill" class="pill warn" data-open-settings>學校網站未登入</span>
-  <button type="button" class="small" data-open-settings>設定</button>
+  <button type="button" class="small ghost icon-btn" data-open-settings title="設定" aria-label="設定"><svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 1 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 1 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg></button>
   <button type="button" class="small primary guest-only" id="guestLogin">登入</button>
 </header>
 
@@ -462,11 +462,7 @@
       <details class="fold" id="ordersPastFold" hidden><summary id="ordersPastSummary"></summary>
         <div class="hits" id="ordersPast" style="margin-top:10px"></div></details>
     </div>
-  </section>
-
-  <div class="col">
-    <section class="card">
-      <h2>租借規定重點</h2>
+    <details class="fold"><summary>租借規定重點</summary>
       <ul class="rules">
         <li>球類場地須於租借日<b>前 7 天至前 3 天</b>提出申請。</li>
         <li>申請成功後須在租借日<b>前 2 天以前繳費</b>，逾期視為放棄。</li>
@@ -474,15 +470,9 @@
         <li>會員證不得供他人使用；違反細則者可能一年內不得租借。</li>
       </ul>
       <p class="hint">依《校總區運動場館管理辦法實施細則》整理</p>
-    </section>
-  </div>
+    </details>
+  </section>
 
-  <div class="col">
-    <section class="card" id="logsCard">
-      <h2>執行紀錄 <button class="ghost right" id="clearLogView" type="button">清除畫面</button></h2>
-      <div class="logs" id="logs"></div>
-    </section>
-  </div>
 </main>
 </div>
 
@@ -527,6 +517,10 @@
     <h3 class="sub">用 Discord 登入的人</h3>
     <div class="admin-list" id="discordUsers"></div>
   </div>
+  <details class="fold" id="logsCard"><summary>執行紀錄</summary>
+    <div class="actions" style="justify-content:flex-end"><button class="small ghost" id="clearLogView" type="button">清除畫面</button></div>
+    <div class="logs" id="logs"></div>
+  </details>
   <h3 class="sub">帳號</h3>
   <div class="actions">
     <button type="button" id="logoutBtn">登出</button>
