@@ -788,7 +788,6 @@ let lastScanSeen = null;
 
 const pyWeekday = (iso) => (parseDate(iso).getDay() + 6) % 7;
 const isSel = (wd, h) => (watch.slots[wd] || []).includes(h);
-const fmtTime = (iso) => (iso ? iso.replace("T", " ").slice(5, 16) : "—");
 const filterName = (id) => (robotData.filters.find((f) => f.id === id) || {}).name || "（已刪除）";
 
 function setSel(wd, h, on) {
@@ -876,11 +875,10 @@ function renderRobotState() {
   $("robotStatus").textContent = st.running
     ? `掃描中 ${vShort(st.venue || "")} ${st.done || 0}/${st.total || "?"}`
     : st.next_scan ? `運作中（你有 ${active} 個濾網啟用）` : "待命（沒有人啟用濾網）";
-  $("lastScan").textContent = fmtTime(st.last_scan);
+  $("lastScan").textContent = ageText(st.last_scan);
   const left = st.next_scan ? new Date(st.next_scan) - new Date() : 0;
   $("nextScan").textContent = !st.next_scan ? "—"
-    : left <= 0 ? `${fmtTime(st.next_scan)}（即將開始）`
-    : `${fmtTime(st.next_scan)}（${countdown(st.next_scan).replace("倒數 ", "")}）`;
+    : left < 60000 ? "1 分鐘內" : left < 3600000 ? `${Math.round(left / 60000)} 分鐘後` : `${Math.round(left / 3600000)} 小時後`;
   $("scanError").textContent = st.error || "";
   if (document.activeElement !== $("interval")) $("interval").value = String(r.interval_min);
 }
@@ -901,7 +899,7 @@ function renderHits() {
       <b>${fmtDate(h.date)} ${timeRange(h.hour, 1)}</b>
       <span>${venueName(h.venue)}${h.status === "available" ? `・線上 ${h.count} 面` : ""}</span>
       ${(h.filters || []).map((fid) => `<span class="tag">${escapeHtml(filterName(fid))}</span>`).join("")}
-      <span class="when">${h.status === "available" ? `發現於 ${fmtTime(h.first_seen)}` : `${fmtTime(h.gone_at)} 失效`}</span>
+      <span class="when">${h.status === "available" ? `${ageText(h.first_seen)}發現` : `${ageText(h.gone_at)}失效`}</span>
       <span class="acts">
       ${h.status === "available" ? `<label class="want">預訂
         <input type="number" min="1" max="${h.count}" value="${Math.min(h.want || 1, h.count)}" data-want="${h.id}" ${busy ? "disabled" : ""}>
@@ -1085,7 +1083,7 @@ function renderDismissed() {
   const html = list.map((h) => `
     <div class="hit"><b>${fmtDate(h.date)} ${timeRange(h.hour, 1)}</b>
       <span>${venueName(h.venue)}・線上 ${h.count} 面</span>
-      <span class="when">發現於 ${fmtTime(h.first_seen)}</span>
+      <span class="when">${ageText(h.first_seen)}發現</span>
       <span class="acts"><button type="button" class="small" data-restore="${h.id}">還原</button></span>
     </div>`).join("");
   if (html !== dismissedHtml) $("dismissedList").innerHTML = dismissedHtml = html; // the 2 s poll would eat clicks
@@ -1215,10 +1213,19 @@ let cacheMinutes = 10;
 let searchSel = [];       // venue ids ticked for the next search
 let searchView = "all";   // "all" = merged, or one venue id
 
-const ageText = (iso) => {
-  const m = Math.floor((new Date() - new Date(iso)) / 60000);
-  return m < 1 ? "剛剛" : m < 60 ? `${m} 分鐘前` : `${Math.floor(m / 60)} 小時前`;
-};
+// How long ago, in the largest unit that matters: 剛剛 / 5 分鐘前 / 3 小時前 / 昨天 / 4 天前 / 2 週前 / 11/3
+function ageText(iso) {
+  if (!iso) return "—";
+  const then = new Date(iso), m = Math.floor((new Date() - then) / 60000);
+  if (m < 1) return "剛剛";
+  if (m < 60) return `${m} 分鐘前`;
+  if (m < 24 * 60) return `${Math.floor(m / 60)} 小時前`;
+  const days = Math.round((parseDate(ymd(new Date())) - parseDate(ymd(then))) / 86400000); // calendar days
+  if (days <= 1) return "昨天";
+  if (days < 14) return `${days} 天前`;
+  if (days < 60) return `${Math.floor(days / 7)} 週前`;
+  return `${then.getMonth() + 1}/${then.getDate()}`;
+}
 const vShort = (id) => { const v = venues.find((v) => v.id === id); return v ? v.short || v.name : id; };
 
 // Venues whose results are on screen: ticked ones that have results, else any with results.
@@ -1269,8 +1276,8 @@ function renderSearchView() {
     `<button type="button" data-view="${id}" aria-pressed="${current === id}">${label}</button>`).join("")}</span>`;
   const when = (res) => res.partial
     ? `${res.partial.running ? "抓取中" : "只抓到"} ${res.partial.done}/${res.partial.total} 面`
-    : `${fmtTime(res.generated)}（${ageText(res.generated)}）`;
-  $("searchMeta").textContent = "資料時間：" + shown.map((id) => `${vShort(id)} ${when(searchResults[id])}`).join("、");
+    : ageText(res.generated) + "更新";
+  $("searchMeta").textContent = shown.map((id) => `${vShort(id)} ${when(searchResults[id])}`).join("・");
 }
 $("searchView").onclick = (e) => {
   const id = e.target.dataset.view;
@@ -1525,7 +1532,7 @@ function renderOrders() {
   $("ordersTab").classList.toggle("urgent", urgent.length > 0);
   $("ordersRefresh").disabled = orders.running;
   $("ordersRefresh").textContent = orders.running ? "讀取中…" : "重新整理";
-  $("ordersMeta").textContent = orders.data ? `資料時間：${fmtTime(orders.data.fetched)}（${ageText(orders.data.fetched)}）` : "";
+  $("ordersMeta").textContent = orders.data ? `${ageText(orders.data.fetched)}更新` : "";
   $("ordersError").hidden = !orders.error;
   $("ordersError").textContent = orders.error || "";
   $("unpaidCount").textContent = unpaid.length ? `${unpaid.length} 筆` : "";
@@ -1593,7 +1600,7 @@ function renderHeat() {
     $("hotList").innerHTML = "";
     return;
   }
-  $("heatMeta").textContent = `${stats.since} ~ ${stats.until}・${stats.courts} 面・更新於 ${fmtTime(stats.generated)}`;
+  $("heatMeta").textContent = `${stats.since} ~ ${stats.until}・${stats.courts} 面・${ageText(stats.generated)}更新`;
   const head = DAY_LABELS.map((l) => `<th style="cursor:default">${l}</th>`).join("");
   const body = HOURS.map((h) => `<tr><th style="cursor:default">${pad(h)}:00</th>${DAY_LABELS.map((_, wd) => {
     const k = heatCell(stats, wd, h);
