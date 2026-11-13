@@ -260,6 +260,11 @@
     background: var(--text); color: var(--bg); padding: 9px 16px; border-radius: 8px; pointer-events: none; z-index: 10; max-width: calc(100% - 32px); }
   .toast.show { opacity: 1; transform: translateX(-50%) translateY(0); }
   .toast.err { background: var(--err); color: #fff; }
+  .undo { position: fixed; bottom: 20px; left: 50%; transform: translateX(-50%); z-index: 11; display: flex; align-items: center; gap: 10px;
+    background: var(--text); color: var(--bg); padding: 4px 6px 4px 16px; border-radius: 8px; max-width: calc(100% - 32px); white-space: nowrap; }
+  .undo[hidden] { display: none; }
+  .undo button { color: var(--accent); font-weight: 700; }
+  table.week { -webkit-touch-callout: none; } /* a long press paints cells, it shouldn't open a menu */
 
   /* login screen */
   .login { max-width: 380px; margin: 12vh auto 40px; padding: 0 16px; }
@@ -299,6 +304,7 @@
     button.small, a.btnlink.small { padding: 7px 12px; font-size: 14px; }
     .actions input { padding: 9px 10px; }
     .chip span { padding: 5px 10px; font-size: 14px; }
+    .toast, .undo { bottom: calc(76px + env(safe-area-inset-bottom)); }
     .tabs { position: fixed; left: 0; right: 0; bottom: 0; margin: 0; z-index: 6; background: var(--card);
       border-top: 1px solid var(--line); border-bottom: none; padding-bottom: env(safe-area-inset-bottom); }
     .tab { flex: 1; padding: 12px 2px; font-size: 13px; border-bottom: none; border-top: 3px solid transparent; }
@@ -544,6 +550,7 @@
 </dialog>
 
 <div class="toast" id="toast"></div>
+<div class="undo" id="undoBar" hidden><span id="undoText"></span><button type="button" class="small ghost" id="undoBtn">復原</button></div>
 
 <script>
 const $ = (id) => document.getElementById(id);
@@ -784,6 +791,31 @@ let robotData = { state: {}, filters: [], hits: [] };
 let watch = EMPTY_FILTER; // the filter being edited (heatmap clicks also edit this one)
 let bookDates = {}; // weekday -> ISO date currently inside the online booking window
 let paint = null; // true = selecting, false = clearing, null = not dragging
+let paintBefore = null; // the filter's hours when a drag started, for 「復原」
+
+/* ---------- 「復原」 after any change made on a timetable ---------- */
+const snapSlots = () => JSON.parse(JSON.stringify(watch.slots));
+function offerUndo(before) {
+  if (!before || !watch.id) return;
+  const key = (sl) => new Set(Object.entries(sl).flatMap(([wd, hs]) => hs.map((h) => `${wd}|${h}`)));
+  const was = key(before), now = key(watch.slots);
+  const added = [...now].filter((k) => !was.has(k)), removed = [...was].filter((k) => !now.has(k));
+  if (!added.length && !removed.length) return;
+  const one = (k) => { const [wd, h] = k.split("|"); return `${DAY_LABELS[wd]} ${pad(Number(h))}:00`; };
+  $("undoText").textContent = added.length + removed.length === 1 ? `已${added.length ? "加入" : "移出"} ${one(added[0] || removed[0])}`
+    : !removed.length ? `已加入 ${added.length} 格` : !added.length ? `已移出 ${removed.length} 格` : `已更新 ${added.length + removed.length} 格`;
+  const fid = watch.id;
+  $("undoBtn").onclick = () => {
+    $("undoBar").hidden = true;
+    if (watch.id !== fid) return;
+    watch.slots = before;
+    renderWeek(); if (!$("panel-heat").hidden) renderHeat();
+    saveWatch();
+  };
+  $("undoBar").hidden = false;
+  clearTimeout(offerUndo.timer);
+  offerUndo.timer = setTimeout(() => ($("undoBar").hidden = true), 5000);
+}
 let saveTimer = null;
 let lastScanSeen = null;
 
@@ -913,11 +945,12 @@ function renderHits() {
 }
 
 $("week").addEventListener("pointerdown", (e) => {
-  if (!watch.id) return;
+  if (!watch.id || e.pointerType !== "mouse") return; // a finger first has to show it isn't scrolling (below)
   const td = e.target.closest("td[data-wd]");
   const th = e.target.closest("th[data-col], th[data-row]");
   if (td) {
     const wd = td.dataset.wd, h = Number(td.dataset.h);
+    paintBefore = snapSlots();
     paint = !isSel(wd, h);
     setSel(wd, h, paint);
     renderWeek();
@@ -926,8 +959,83 @@ $("week").addEventListener("pointerdown", (e) => {
   }
 });
 
+/* ---------- touch on the timetables: a scroll must never change anything ----------
+   A tap counts only when the finger lifts within TAP_MS and moved less than TAP_MOVE px; anything else is a
+   scroll. On the filter's week table a finger held still for LONG_MS starts painting: then dragging selects
+   (or clears) cells instead of scrolling, until the finger lifts. */
+const TAP_MOVE = 10, TAP_MS = 500, LONG_MS = 450;
+function watchTaps(table) {
+  const st = { touch: false, ok: true, x: 0, y: 0, t: 0 };
+  table.addEventListener("pointerdown", (e) => Object.assign(st, { touch: e.pointerType !== "mouse", ok: true, x: e.clientX, y: e.clientY, t: Date.now() }));
+  table.addEventListener("pointermove", (e) => { if (st.touch && Math.hypot(e.clientX - st.x, e.clientY - st.y) > TAP_MOVE) st.ok = false; });
+  table.addEventListener("pointerup", () => { if (st.touch && Date.now() - st.t > TAP_MS) st.ok = false; });
+  table.addEventListener("pointercancel", () => (st.ok = false));
+  return st; // read by the table's click handler: a touch click counts only while st.ok
+}
+const weekTap = watchTaps($("week"));
+const heatTap = watchTaps($("heat"));
+const availTap = watchTaps($("avail"));
+
+// Week, touch: a tap toggles a cell (or a header's whole day / hour).
+$("week").addEventListener("click", (e) => {
+  if (!weekTap.touch || !weekTap.ok || !watch.id) return; // mouse clicks were handled on pointerdown
+  const td = e.target.closest("td[data-wd]");
+  const th = e.target.closest("th[data-col], th[data-row]");
+  if (td) {
+    const wd = td.dataset.wd, h = Number(td.dataset.h), before = snapSlots();
+    setSel(wd, h, !isSel(wd, h));
+    renderWeek(); saveWatch(); offerUndo(before);
+  } else if (th) toggleWeekHeader(th);
+});
+
+// Week, touch: hold still, then drag to paint.
+let touchPaint = false, longTimer = null;
+$("week").addEventListener("touchstart", (e) => {
+  const td = e.target.closest("td[data-wd]");
+  if (!td || !watch.id || e.touches.length !== 1) return;
+  const t0 = e.touches[0], x = t0.clientX, y = t0.clientY;
+  // Redrawing the table removes the touched cell from the page, and the rest of this touch keeps going to
+  // that removed element without bubbling up; so listen on the element itself as well as on the document.
+  const el = e.target;
+  el.addEventListener("touchmove", onPaintMove, { passive: false });
+  for (const type of ["touchend", "touchcancel"]) el.addEventListener(type, function done() {
+    el.removeEventListener("touchmove", onPaintMove); el.removeEventListener(type, done); endTouchPaint();
+  });
+  clearTimeout(longTimer);
+  longTimer = setTimeout(() => {
+    if (!weekTap.ok) return; // it moved: a scroll
+    weekTap.ok = false; // and the lift won't count as a tap
+    touchPaint = true;
+    paintBefore = snapSlots();
+    const wd = td.dataset.wd, h = Number(td.dataset.h);
+    paint = !isSel(wd, h);
+    setSel(wd, h, paint);
+    renderWeek();
+    if (navigator.vibrate) navigator.vibrate(15);
+  }, LONG_MS);
+  weekTap.x = x; weekTap.y = y;
+}, { passive: true });
+function onPaintMove(e) {
+  if (!touchPaint) { if (weekTap.touch && !weekTap.ok) clearTimeout(longTimer); return; }
+  e.preventDefault(); // painting, not scrolling
+  const t = e.touches[0];
+  const td = document.elementFromPoint(t.clientX, t.clientY)?.closest("#week td[data-wd]");
+  if (td && isSel(td.dataset.wd, Number(td.dataset.h)) !== paint) { setSel(td.dataset.wd, Number(td.dataset.h), paint); renderWeek(); }
+}
+document.addEventListener("touchmove", onPaintMove, { passive: false });
+const endTouchPaint = () => {
+  clearTimeout(longTimer);
+  if (!touchPaint) return;
+  touchPaint = false; paint = null;
+  saveWatch(); offerUndo(paintBefore);
+};
+document.addEventListener("touchend", endTouchPaint);
+document.addEventListener("touchcancel", endTouchPaint);
+$("week").addEventListener("contextmenu", (e) => e.preventDefault());
+
 // A day header toggles the whole day, an hour header the whole row.
 function toggleWeekHeader(th) {
+  const before = snapSlots();
   if (th.dataset.col !== undefined) {
     const wd = th.dataset.col;
     const on = !HOURS.every((h) => isSel(wd, h));
@@ -937,7 +1045,7 @@ function toggleWeekHeader(th) {
     const on = !days.every((wd) => isSel(wd, h));
     days.forEach((wd) => setSel(wd, h, on));
   }
-  renderWeek(); saveWatch();
+  renderWeek(); saveWatch(); offerUndo(before);
 }
 
 const isActivateKey = (e) => e.key === "Enter" || e.key === " ";
@@ -957,19 +1065,20 @@ $("week").addEventListener("keydown", (e) => {
 });
 $("week").addEventListener("pointerover", (e) => {
   if (paint === null) return;
-  if (!(e.buttons & 1)) { paint = null; saveWatch(); return; } // pointerup was missed (e.g. released outside the window)
+  if (touchPaint) return;
+  if (!(e.buttons & 1)) { paint = null; saveWatch(); offerUndo(paintBefore); return; } // pointerup was missed (e.g. released outside the window)
   const td = e.target.closest("td[data-wd]");
   if (td && isSel(td.dataset.wd, Number(td.dataset.h)) !== paint) { setSel(td.dataset.wd, Number(td.dataset.h), paint); renderWeek(); }
 });
-window.addEventListener("pointerup", () => { if (paint !== null) { paint = null; saveWatch(); } });
-window.addEventListener("pointercancel", () => { if (paint !== null) { paint = null; saveWatch(); } });
+window.addEventListener("pointerup", () => { if (paint !== null && !touchPaint) { paint = null; saveWatch(); offerUndo(paintBefore); } });
+window.addEventListener("pointercancel", () => { if (paint !== null && !touchPaint) { paint = null; saveWatch(); offerUndo(paintBefore); } });
 
 document.querySelectorAll("[data-preset]").forEach((b) => (b.onclick = () => {
-  const p = b.dataset.preset;
+  const p = b.dataset.preset, before = snapSlots();
   if (p === "clear") watch.slots = {};
   if (p === "weeknight") [0, 1, 2, 3, 4].forEach((wd) => [18, 19, 20, 21].forEach((h) => setSel(String(wd), h, true)));
   if (p === "weekend") [5, 6].forEach((wd) => [9, 10, 11, 12, 13, 14, 15, 16, 17].forEach((h) => setSel(String(wd), h, true)));
-  renderWeek(); saveWatch();
+  renderWeek(); saveWatch(); offerUndo(before);
 }));
 
 $("watchVenues").onchange = () => {
@@ -1388,6 +1497,7 @@ $("bookGo").onclick = guard(async () => {
   loadPreps(); refreshLogs();
 });
 $("avail").addEventListener("click", (e) => {
+  if (availTap.touch && !availTap.ok) return; // the finger moved: a scroll
   const td = e.target.closest("td.bookable");
   if (td) openBook(td.dataset.d, Number(td.dataset.h));
 });
@@ -1652,14 +1762,18 @@ $("heat").addEventListener("focusout", () => ($("heatTip").hidden = true));
 
 function toggleHeatCell(td) {
   if (!watch.id) { toast("請先到「機器人預訂」建立一個濾網", true); return; }
-  const wd = td.dataset.wd, h = Number(td.dataset.h);
+  const wd = td.dataset.wd, h = Number(td.dataset.h), before = snapSlots();
   setSel(wd, h, !isSel(wd, h));
-  saveWatch(); renderHeat();
+  saveWatch(); renderHeat(); offerUndo(before);
   const again = $("heat").querySelector(`td[data-wd="${wd}"][data-h="${h}"]`);
   heatTip(again);
   return again;
 }
-$("heat").addEventListener("click", (e) => { const td = e.target.closest("td[data-wd]"); if (td) toggleHeatCell(td); });
+$("heat").addEventListener("click", (e) => {
+  if (heatTap.touch && !heatTap.ok) return; // the finger moved: a scroll
+  const td = e.target.closest("td[data-wd]");
+  if (td) toggleHeatCell(td);
+});
 $("heat").addEventListener("keydown", (e) => {
   const td = e.target.closest("td[data-wd]");
   if (!isActivateKey(e) || !td) return;
