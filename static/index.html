@@ -88,6 +88,7 @@
   button.icon-btn { display: inline-flex; align-items: center; justify-content: center; padding: 6px 8px; line-height: 0; }
   button:disabled { opacity: .5; cursor: not-allowed; }
   .actions input { width: auto; flex: 1; min-width: 0; padding: 7px 10px; } /* as tall as the button beside it */
+  .contents { display: contents; } .contents[hidden] { display: none; }
   .actions { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
   a { color: var(--accent); }
   .hint { font-size: 12.5px; color: var(--muted); margin: 6px 0 0; }
@@ -106,6 +107,8 @@
 
   .wide { grid-column: 1 / -1; }
   .grid-wrap.split { border-top: 1px solid color-mix(in srgb, var(--muted) 45%, transparent); padding-top: 12px; } /* the venue choice above, the timetable below */
+  .heat-scale { display: inline-flex; align-items: center; gap: 2px; } .heat-scale .sw { margin: 0; }
+  .heat-scale .sw:first-of-type { margin-left: 4px; } .heat-scale .sw:last-of-type { margin-right: 4px; }
   .toolbar { display: flex; flex-wrap: wrap; gap: 10px 18px; align-items: center; margin-bottom: 14px; }
   .toolbar .group { display: flex; gap: 6px; align-items: center; flex-wrap: wrap; }
   .toolbar .label { font-size: 12.5px; color: var(--muted); margin-right: 2px; }
@@ -495,12 +498,12 @@
       <label class="field"><span>計中密碼</span><input id="schoolPassword" type="password" autocomplete="off"></label>
     </div>
     <label class="switch" style="margin-bottom:10px;font-weight:400"><input type="checkbox" id="schoolRemember" checked><span class="track"></span><span>讓伺服器記住密碼（加密保存）</span></label>
-    <div class="actions"><button type="submit" class="primary" id="schoolGo">連結</button></div>
+    <div class="actions"><button type="submit" class="primary" id="schoolGo">連結</button>
+      <span class="contents" id="schoolActions">
+        <button type="button" id="schoolForget">刪除儲存的密碼</button>
+        <button type="button" class="danger" id="schoolUnlink">取消連結計中帳號</button>
+      </span></div>
   </form>
-  <div class="actions" id="schoolActions" style="margin-top:8px">
-    <button type="button" id="schoolForget">刪除儲存的密碼</button>
-    <button type="button" class="danger" id="schoolUnlink">取消連結計中帳號</button>
-  </div>
   <h3 class="sub">Discord 通知</h3>
   <p style="margin:0 0 6px" id="discordState"></p>
   <p class="hint" id="discordHint">在 Discord 對 bot 輸入 <b>/link</b>（私訊 bot，或在 bot 所在的伺服器裡），點它回的按鈕就會連結到這個帳號。要停止通知就輸入 <b>/unlink</b>。bot 只能私訊和它在同一個 Discord 伺服器的人。</p>
@@ -1614,8 +1617,7 @@ function renderHeat() {
   $("heat").innerHTML = `<thead><tr><th></th>${head}</tr></thead><tbody>${body}</tbody>`;
 
   $("heatLegend").innerHTML =
-    `<span>被訂光的比例</span>` +
-    HEAT_BINS.map(([lo, hi], i) => `<span><i class="sw" style="background:var(--h${i})"></i>${Math.round(lo * 100)}–${Math.min(100, Math.round(hi * 100))}%</span>`).join("") +
+    `<span class="heat-scale">好訂${HEAT_BINS.map((_, i) => `<i class="sw" style="background:var(--h${i})"></i>`).join("")}難訂</span>` +
     `<span><i class="closed" style="display:inline-block;width:22px;height:14px;vertical-align:-2px;border-radius:3px"></i>從未開放線上租借</span>` +
     `<span><i class="sw frame-few"></i>樣本少於 ${FEW} 面次</span><span><i class="sw frame-watched"></i>濾網中的時段</span>`;
 
