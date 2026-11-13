@@ -10,9 +10,18 @@
                                                 --notify DMs everybody the new address
   python manage.py discord-setup                register /link, /unlink and the button endpoint with
                                                 Discord (done by the two commands above too)
+  python manage.py write-redirect               rewrite the fixed-address page (REDIRECT_FILE) now
+
+A quick tunnel's address changes on every restart. With REDIRECT_FILE set (deploy/env), e.g. to
+~/htdocs/nb/index.html on the CSIE workstations, a tiny static page there forwards to the current address,
+so https://www.csie.ntu.edu.tw/~<you>/nb/ (REDIRECT_URL) keeps working as a bookmark.
 """
 import getpass
+import html
+import json
+import os
 import sys
+from pathlib import Path
 
 import config
 
@@ -71,8 +80,16 @@ def main(argv: list[str]) -> None:
         config.save(cfg)
         print(f"public_url = {cfg['public_url']}")
         _discord_setup()  # Discord must send /link and button presses to the new address
+        _write_redirect(cfg["public_url"])
         if changed and "--notify" in args:
-            _notify_everybody(f"🔗 場地預約的新網址：{cfg['public_url']}")
+            fixed = os.environ.get("REDIRECT_URL", "").strip()
+            if fixed:
+                _notify_everybody(f"🔗 伺服器重新啟動過，網站要重新登入一次：打開 {fixed} 登入，或在 Discord 打 /login。", fixed)
+            else:
+                _notify_everybody(f"🔗 場地預約的新網址：{cfg['public_url']}")
+        return
+    elif cmd == "write-redirect":
+        _write_redirect(cfg["public_url"])
         return
     else:
         sys.exit(f"不認得的指令：{cmd}\n{__doc__}")
@@ -92,6 +109,44 @@ def _discord_setup() -> None:
         print(f"Discord 設定沒有成功：{e}")
 
 
+REDIRECT_PAGE = r"""<!DOCTYPE html>
+<html lang="zh-Hant"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="robots" content="noindex">
+<meta http-equiv="Cache-Control" content="no-cache">
+<title>臺大場地預約</title>
+<style>body{{font-family:system-ui,sans-serif;background:#111;color:#ddd;display:grid;place-items:center;min-height:90vh;margin:0}}a{{color:#8ab4ff}}</style>
+<script>
+// The address in this page can be stale in the phone's cache, so ask for url.txt fresh first.
+(function () {{
+  var fallback = {url_js};
+  function go(u) {{ location.replace(u.replace(/\/+$/, "") + "/" + location.hash); }}
+  fetch("url.txt?t=" + Date.now(), {{ cache: "no-store" }})
+    .then(function (r) {{ return r.ok ? r.text() : fallback; }})
+    .then(function (u) {{ u = u.trim(); go(/^https:\/\//.test(u) ? u : fallback); }})
+    .catch(function () {{ go(fallback); }});
+}})();
+</script>
+<noscript><meta http-equiv="refresh" content="0; url={url_attr}/"></noscript>
+</head><body><p>正在打開場地預約… 沒有自動跳轉的話請按 <a href="{url_attr}/">這裡</a>。</p></body></html>
+"""
+
+
+def _write_redirect(url: str) -> None:
+    """Point the fixed-address page (REDIRECT_FILE, if set) at the current public address."""
+    target = os.environ.get("REDIRECT_FILE", "").strip()
+    if not target or not url.startswith("https://"):
+        return
+    page = Path(os.path.expanduser(target))
+    page.parent.mkdir(parents=True, exist_ok=True)
+    page.write_text(REDIRECT_PAGE.format(url_js=json.dumps(url), url_attr=html.escape(url)), encoding="utf-8")
+    (page.parent / "url.txt").write_text(url + "\n", encoding="utf-8")
+    for f in (page, page.parent / "url.txt"):
+        f.chmod(0o644)  # the department's web server reads it as another user
+    page.parent.chmod(0o755)
+    print(f"轉址頁已更新：{page} → {url}")
+
+
 def _end_web_sessions(names: set[str]) -> None:
     """Log these accounts out of the web app (same file as server.end_web_sessions)."""
     import json
@@ -102,7 +157,7 @@ def _end_web_sessions(names: set[str]) -> None:
         config.write_json(f, {k: v for k, v in data.items() if v["account"] not in names})
 
 
-def _notify_everybody(text: str) -> None:
+def _notify_everybody(text: str, open_url: str = "") -> None:
     import notify
     import robot
     import session
@@ -111,7 +166,7 @@ def _notify_everybody(text: str) -> None:
         did = robot.load_config(session.account(name)).get("discord_id")
         if did:
             try:
-                notify.send_now(did, text, ("打開網站", config.load()["public_url"] + "/"))
+                notify.send_now(did, text, ("打開網站", open_url or config.load()["public_url"] + "/"))
             except Exception as e:
                 print(f"通知 {name} 失敗：{e}")
 
