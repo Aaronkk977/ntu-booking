@@ -103,6 +103,7 @@
   ul.rules b { color: var(--text); font-weight: 600; }
 
   .wide { grid-column: 1 / -1; }
+  .grid-wrap.split { border-top: 1px solid color-mix(in srgb, var(--muted) 45%, transparent); padding-top: 12px; } /* the venue choice above, the timetable below */
   .toolbar { display: flex; flex-wrap: wrap; gap: 10px 18px; align-items: center; margin-bottom: 14px; }
   .toolbar .group { display: flex; gap: 6px; align-items: center; flex-wrap: wrap; }
   .toolbar .label { font-size: 12.5px; color: var(--muted); margin-right: 2px; }
@@ -363,7 +364,7 @@
         <div class="group"><span class="label">顯示</span><span id="searchView" class="group"></span></div>
         <span class="hint" id="searchMeta" style="margin:0"></span>
       </div>
-      <div class="grid-wrap" style="position:relative">
+      <div class="grid-wrap split" style="position:relative">
         <table class="week avail" id="avail"></table>
         <div class="tip" id="availTip" hidden></div>
       </div>
@@ -418,7 +419,7 @@
           <button type="button" class="small" data-preset="clear">全部清除</button>
         </div>
       </div>
-      <div class="grid-wrap"><table class="week" id="week"></table></div>
+      <div class="grid-wrap split"><table class="week" id="week"></table></div>
       <div class="legend">
         <span><i class="sel"></i>這個濾網的時段</span>
         <span><i class="open"></i>目前線上有空（幾面）</span>
