@@ -87,7 +87,9 @@
   body.guest #prepBox { display: none !important; }
   button.icon-btn { display: inline-flex; align-items: center; justify-content: center; padding: 6px 8px; line-height: 0; }
   button:disabled { opacity: .5; cursor: not-allowed; }
+  .actions input { width: auto; flex: 1; min-width: 0; padding: 7px 10px; } /* as tall as the button beside it */
   .actions { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
+  a { color: var(--accent); }
   .hint { font-size: 12.5px; color: var(--muted); margin: 6px 0 0; }
 
   .empty { color: var(--muted); text-align: center; padding: 28px 0; border: 1px dashed var(--line); border-radius: 9px; }
@@ -115,7 +117,7 @@
   .chip input:checked + span { background: var(--accent); border-color: var(--accent); color: #fff; }
   .chip input:focus-visible + span { box-shadow: 0 0 0 3px var(--accent-soft); }
   select.compact { width: auto; padding: 4px 8px; }
-  button.small { padding: 4px 10px; font-size: 13px; }
+  button.small, a.btnlink.small { padding: 4px 10px; font-size: 13px; }
 
   .switch { position: relative; display: inline-flex; align-items: center; gap: 8px; cursor: pointer; user-select: none; font-weight: 600; }
   .switch input { position: absolute; opacity: 0; }
@@ -236,7 +238,9 @@
   .hit .due { font-size: 12.5px; color: var(--warn); }
   .hit .due.late { color: var(--err); font-weight: 600; }
   .orders-error { color: var(--err); margin: 0 0 10px; }
-  a.btnlink { display: inline-block; text-decoration: none; border-radius: 7px; border: 1px solid var(--line); color: var(--text); padding: 4px 10px; font-size: 13px; }
+  a.btnlink { display: inline-block; text-decoration: none; border-radius: 7px; border: 1px solid var(--line); color: var(--text);
+    background: var(--card); padding: 7px 14px; font: inherit; text-align: center; } /* same box as <button> */
+  a.btnlink:hover { border-color: var(--accent); }
   a.btnlink.primary { background: var(--accent); border-color: var(--accent); color: #fff; font-weight: 600; }
   .tab.urgent, .tab.urgent[aria-selected="true"] { color: var(--err); font-weight: 600; }
 
@@ -286,8 +290,9 @@
     header .spacer { display: none; }
     main { padding: 10px; gap: 12px; }
     section.card { padding: 12px; border-radius: 0; border-left: none; border-right: none; margin: 0 -10px; }
-    button { padding: 9px 14px; }
-    button.small { padding: 7px 12px; font-size: 14px; }
+    button, a.btnlink { padding: 9px 14px; }
+    button.small, a.btnlink.small { padding: 7px 12px; font-size: 14px; }
+    .actions input { padding: 9px 10px; }
     .chip span { padding: 5px 10px; font-size: 14px; }
     .tabs { position: fixed; left: 0; right: 0; bottom: 0; margin: 0; z-index: 6; background: var(--card);
       border-top: 1px solid var(--line); border-bottom: none; padding-bottom: env(safe-area-inset-bottom); }
@@ -461,16 +466,16 @@
       <div class="hits" id="ordersPaid"></div>
       <details class="fold" id="ordersPastFold" hidden><summary id="ordersPastSummary"></summary>
         <div class="hits" id="ordersPast" style="margin-top:10px"></div></details>
+      <details class="fold"><summary>租借規定重點</summary>
+        <ul class="rules">
+          <li>球類場地須於租借日<b>前 7 天至前 3 天</b>提出申請。</li>
+          <li>申請成功後須在租借日<b>前 2 天以前繳費</b>，逾期視為放棄。</li>
+          <li>一年內借了沒用、也沒取消達 <b>3 次</b>，一年內不得再借綜合體育館球場。</li>
+          <li>會員證不得供他人使用；違反細則者可能一年內不得租借。</li>
+        </ul>
+        <p class="hint">依《校總區運動場館管理辦法實施細則》整理</p>
+      </details>
     </div>
-    <details class="fold"><summary>租借規定重點</summary>
-      <ul class="rules">
-        <li>球類場地須於租借日<b>前 7 天至前 3 天</b>提出申請。</li>
-        <li>申請成功後須在租借日<b>前 2 天以前繳費</b>，逾期視為放棄。</li>
-        <li>一年內借了沒用、也沒取消達 <b>3 次</b>，一年內不得再借綜合體育館球場。</li>
-        <li>會員證不得供他人使用；違反細則者可能一年內不得租借。</li>
-      </ul>
-      <p class="hint">依《校總區運動場館管理辦法實施細則》整理</p>
-    </details>
   </section>
 
 </main>
@@ -493,8 +498,8 @@
     <div class="actions"><button type="submit" class="primary" id="schoolGo">連結</button></div>
   </form>
   <div class="actions" id="schoolActions" style="margin-top:8px">
-    <button type="button" class="small" id="schoolForget">刪除儲存的密碼</button>
-    <button type="button" class="small danger" id="schoolUnlink">取消連結計中帳號</button>
+    <button type="button" id="schoolForget">刪除儲存的密碼</button>
+    <button type="button" class="danger" id="schoolUnlink">取消連結計中帳號</button>
   </div>
   <h3 class="sub">Discord 通知</h3>
   <p style="margin:0 0 6px" id="discordState"></p>
@@ -503,7 +508,7 @@
   <details class="fold"><summary>改用手動輸入使用者 ID</summary>
     <label class="field" style="margin-top:10px"><span>Discord 使用者 ID（開發者模式 → 在自己頭像按右鍵 →「複製使用者 ID」）</span>
       <input id="discordId" type="text" inputmode="numeric" placeholder="例：123456789012345678"></label>
-    <div class="actions"><button type="button" class="small" id="discordSave">儲存</button></div>
+    <div class="actions"><button type="button" id="discordSave">儲存</button></div>
   </details>
   <h3 class="sub">預訂人數</h3>
   <div class="group" id="members"></div>
@@ -511,8 +516,8 @@
   <div id="adminBox" hidden>
     <h3 class="sub">允許登入的帳號（管理者）</h3>
     <div class="admin-list" id="allowList"></div>
-    <div class="actions"><input id="allowAdd" type="text" class="compact" placeholder="計中帳號" autocapitalize="none">
-      <button type="button" class="small" id="allowAddBtn">加入</button></div>
+    <div class="actions"><input id="allowAdd" type="text" placeholder="計中帳號" autocapitalize="none">
+      <button type="button" id="allowAddBtn">加入</button></div>
     <p class="hint" id="adminHint"></p>
     <h3 class="sub">用 Discord 登入的人</h3>
     <div class="admin-list" id="discordUsers"></div>
@@ -903,7 +908,7 @@ function renderHits() {
         <input type="number" min="1" max="${h.count}" value="${Math.min(h.want || 1, h.count)}" data-want="${h.id}" ${busy ? "disabled" : ""}>
         面</label>
         ${me && me.can_book ? `<button type="button" class="small primary" data-book="${h.id}" ${busy ? "disabled" : ""}>預訂</button>`
-          : `<a class="btnlink primary" href="${schoolUrl(h.venue)}" target="_blank" rel="noopener">到學校網站訂</a>`}` : ""}
+          : `<a class="small btnlink primary" href="${schoolUrl(h.venue)}" target="_blank" rel="noopener">到學校網站訂</a>`}` : ""}
       <button type="button" class="small ghost" data-dismiss="${h.id}" title="從清單移除">✕</button>
       </span>
     </div>`).join("") : '<div class="empty">目前沒有符合濾網的空位</div>';
