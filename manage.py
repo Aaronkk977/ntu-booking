@@ -120,7 +120,7 @@ REDIRECT_PAGE = r"""<!DOCTYPE html>
 // The address in this page can be stale in the phone's cache, so ask for url.txt fresh first.
 (function () {{
   var fallback = {url_js};
-  function go(u) {{ location.replace(u.replace(/\/+$/, "") + "/" + location.hash); }}
+  function go(u) {{ location.replace(u.replace(/\/+$/, "") + "/" + location.search + location.hash); }}
   fetch("url.txt?t=" + Date.now(), {{ cache: "no-store" }})
     .then(function (r) {{ return r.ok ? r.text() : fallback; }})
     .then(function (u) {{ u = u.trim(); go(/^https:\/\//.test(u) ? u : fallback); }})

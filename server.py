@@ -18,6 +18,8 @@ import signal
 import sys
 import threading
 import time
+import urllib.parse
+import urllib.request
 from datetime import date, datetime, timedelta
 from http.cookies import SimpleCookie
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -437,6 +439,23 @@ def _on_robot_error(msg: str) -> None:
 LINK_CODE_S = 10 * 60
 _link_codes: dict[str, tuple[str, float]] = {}  # one-time code from /link -> (discord user id, expiry)
 _login_codes: dict[str, tuple[str, str, float]] = {}  # from /login -> (discord user id, name, expiry)
+_oauth_states: dict[str, tuple[str, float]] = {}  # 「用 Discord 登入」 -> ("", expiry), used once
+GUEST_PATHS = ("/api/venues", "/api/history", "/api/search")
+
+
+def oauth_redirect() -> str:
+    """Where Discord sends people back after 「用 Discord 登入」: the fixed address page (REDIRECT_URL from
+    deploy/env, or "discord_redirect" in config.json), which forwards to the current tunnel. It must also
+    be listed under OAuth2 → Redirects in the Discord Developer Portal."""
+    return (config.load().get("discord_redirect") or os.environ.get("REDIRECT_URL", "")).strip()
+
+
+def discord_user(access_token: str) -> dict:
+    """The Discord user an OAuth access token belongs to (scope identify)."""
+    req = urllib.request.Request(notify.API + "/users/@me", headers={
+        "Authorization": f"Bearer {access_token}", "User-Agent": notify.USER_AGENT})
+    with urllib.request.urlopen(req, timeout=15) as res:
+        return json.loads(res.read())
 
 
 def _new_code(codes: dict, *value) -> str:
@@ -794,8 +813,16 @@ class Handler(BaseHTTPRequestHandler):
                 return self._login(body)
             if (method, path) == ("POST", "/api/login/discord"):
                 return self._login_discord(body)
+            if (method, path) == ("GET", "/api/login/options"):
+                return self._json({"discord_oauth": bool(oauth_redirect() and config.load()["discord_token"])})
+            if (method, path) == ("POST", "/api/login/discord/start"):
+                return self._oauth_start()
+            if (method, path) == ("POST", "/api/login/oauth"):
+                return self._oauth_finish(body)
             acct = self._account()
             if acct is None:
+                if method == "GET" and path in GUEST_PATHS:
+                    return self._guest_get(path)
                 return self._error(401)
             return getattr(self, f"_{method.lower()}")(acct, path, body)
         except BrokenPipeError:
@@ -845,6 +872,10 @@ class Handler(BaseHTTPRequestHandler):
         if not entry or entry[2] < time.monotonic():
             return self._error(400, "這個登入連結已經用過或過期了，請在 Discord 再打一次 /login")
         discord_id, uname, _ = entry
+        return self._web_login_discord(discord_id, uname)
+
+    def _web_login_discord(self, discord_id: str, uname: str):
+        """Log this browser in as a Discord user (already checked: a member of the server, not blocked)."""
         acct = _account_by_discord(discord_id)
         if acct is None:
             name = config.discord_account(discord_id)
@@ -860,6 +891,57 @@ class Handler(BaseHTTPRequestHandler):
         token = new_web_session(acct.name)
         log("info", "已用 Discord 登入", acct.name)
         return self._json({"ok": True, "account": acct.name}, headers=self._cookie_header(token, WEB_SESSION_DAYS * 86400))
+
+    def _oauth_start(self):
+        """「用 Discord 登入」: the address of Discord's authorize page (implicit grant, scope identify)."""
+        redirect = oauth_redirect()
+        if not redirect or not config.load()["discord_token"]:
+            return self._error(400, "伺服器還沒設定 Discord 登入，請在 Discord 打 /login")
+        try:
+            app_id = notify.application()["id"]
+        except Exception as e:
+            return self._error(502, f"連不到 Discord（{_err(e)}）")
+        state = _new_code(_oauth_states, "")
+        query = urllib.parse.urlencode({"client_id": app_id, "response_type": "token", "scope": "identify",
+                                        "redirect_uri": redirect, "state": state, "prompt": "none"})
+        return self._json({"url": f"https://discord.com/oauth2/authorize?{query}"})
+
+    def _oauth_finish(self, body: dict):
+        """Back from Discord with an access token (through the fixed address page): find out who it is."""
+        ip = self._client_ip()
+        if _too_many_fails(f"i:{ip}"):
+            return self._error(429, "失敗次數太多，請 15 分鐘後再試")
+        entry = _oauth_states.pop(str(body.get("state") or ""), None)
+        token = str(body.get("access_token") or "")
+        if not entry or entry[-1] < time.monotonic() or not token:
+            _add_fail(f"i:{ip}")
+            return self._error(400, "登入逾時或連結不對，請再按一次「用 Discord 登入」")
+        try:
+            user = discord_user(token)
+        except Exception as e:
+            log("warn", f"Discord 登入失敗：{_err(e)}")
+            return self._error(502, "Discord 沒有確認你的身分，請再試一次，或在 Discord 打 /login")
+        discord_id = str(user.get("id") or "")
+        uname = str(user.get("global_name") or user.get("username") or discord_id)
+        if not discord_id:
+            return self._error(502, "Discord 沒有回傳帳號")
+        if config.discord_account(discord_id) in config.load()["blocked"]:
+            return self._error(403, "管理者已停用你的帳號")
+        if not _is_member({}, discord_id):
+            return self._error(403, "只有在預約系統的 Discord 伺服器裡的人才能登入，請先請管理者邀你加入")
+        return self._web_login_discord(discord_id, uname)
+
+    def _guest_get(self, path: str):
+        """Not logged in: the shared search results and the heat map, read only."""
+        if path == "/api/venues":
+            return self._json(VENUES)
+        if path == "/api/history":
+            return self._json({"stats": history.load_all(), "job": _history_job, "can_update": False})
+        if not _search_job["running"]:
+            _sync_search_from_cache()
+        job = {k: v for k, v in _search_job.items() if k != "by"}  # who searched is nobody else's business
+        return self._json({"results": _shown_results(), "job": job, "cache_minutes": scanner.CACHE_MAX_AGE_S // 60,
+                           "guest": True})
 
     # --- GET ---
 

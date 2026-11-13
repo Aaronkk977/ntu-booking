@@ -76,6 +76,12 @@
   button.ghost { border-color: transparent; background: transparent; color: var(--muted); }
   button.ghost:hover { color: var(--text); background: var(--bg); }
   button.danger:hover { border-color: var(--err); color: var(--err); }
+  .guest-only { display: none !important; }
+  body.guest .guest-only { display: inline-flex !important; }
+  body.guest span.guest-only { display: inline !important; }
+  body.guest .tab[data-tab="filter"], body.guest .tab[data-tab="orders"], body.guest #sessionPill,
+  body.guest header [data-open-settings], body.guest #searchBtn, body.guest #searchForce, body.guest #logsCard,
+  body.guest #prepBox { display: none !important; }
   button.icon-btn { display: inline-flex; align-items: center; justify-content: center; padding: 6px 8px; line-height: 0; }
   button:disabled { opacity: .5; cursor: not-allowed; }
   .actions { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
@@ -295,9 +301,13 @@
 <div class="login" id="loginScreen" hidden>
   <h1>臺大場地預約</h1>
   <section class="card" id="discordLoginCard">
-    <h2 style="font-size:15px;margin:0 0 8px">用 Discord 登入</h2>
-    <p style="margin:0">在預約系統的 Discord 伺服器（或私訊 bot）輸入 <b>/login</b>，點 bot 回你的按鈕就會登入。不需要任何密碼。</p>
-    <p class="hint">登入後可以設定自己的濾網、收到空場私訊，再自己到學校網站預訂。想讓伺服器幫你填好預訂，之後可以在「設定」連結計中帳號。</p>
+    <h2 style="font-size:15px;margin:0 0 10px">登入</h2>
+    <div class="big" style="display:grid;gap:8px">
+      <button type="button" class="primary" id="oauthGo" hidden>用 Discord 登入</button>
+      <button type="button" id="guestGo">先逛逛（訪客，不用登入）</button>
+    </div>
+    <p class="hint" id="oauthHint">也可以在預約系統的 Discord 伺服器（或私訊 bot）輸入 <b>/login</b>，點 bot 回你的按鈕登入。不需要任何密碼。</p>
+    <p class="hint">登入後可以設定自己的濾網、收到空場私訊；在「設定」連結計中帳號後，伺服器還能幫你訂。訪客只能看空位和熱門度。</p>
     <p class="hint" id="discordLoginMsg"></p>
   </section>
   <details class="fold"><summary>用計中帳號登入</summary>
@@ -324,6 +334,7 @@
   <span id="acctPill" class="pill info"></span>
   <span id="sessionPill" class="pill warn">學校網站未登入</span>
   <button type="button" class="small" data-open-settings>設定</button>
+  <button type="button" class="small primary guest-only" id="guestLogin">登入</button>
 </header>
 
 <main>
@@ -341,6 +352,7 @@
         <div class="group"><span class="label">場地（可複選）</span><span id="searchVenues" class="group"></span></div>
         <button type="button" class="small primary" id="searchBtn">搜尋</button>
         <button type="button" class="small" id="searchForce" title="不使用快取，重新向網站抓取">重新抓取</button>
+        <span class="hint guest-only" style="margin:0">訪客看到的是大家最近一次搜尋的結果；登入後才能自己搜尋、設定通知。</span>
       </div>
       <div class="toolbar" id="searchViewBar" hidden>
         <div class="group"><span class="label">顯示</span><span id="searchView" class="group"></span></div>
@@ -457,7 +469,7 @@
   </div>
 
   <div class="col">
-    <section class="card">
+    <section class="card" id="logsCard">
       <h2>執行紀錄 <button class="ghost right" id="clearLogView" type="button">清除畫面</button></h2>
       <div class="logs" id="logs"></div>
     </section>
@@ -563,9 +575,13 @@ async function api(path, opts = {}) {
 let me = null;
 let timers = [];
 
+let guest = false; // looking around without logging in: shared search results and the heat map only
+
 function showLogin() {
   timers.forEach(clearInterval); timers = [];
   me = null;
+  guest = false;
+  document.body.classList.remove("guest");
   $("app").hidden = true;
   $("loginScreen").hidden = false;
   if ($("settings").open) $("settings").close();
@@ -729,6 +745,7 @@ function placeTip(tip, td) {
 
 /* ---------- logs ---------- */
 async function refreshLogs() {
+  if (guest) return;
   const logs = await api("/api/logs");
   const box = $("logs");
   const atBottom = box.scrollHeight - box.scrollTop - box.clientHeight < 20;
@@ -1085,6 +1102,7 @@ const FINISHED = ["done", "failed", "cancelled", "expired"];
 const activePrep = () => preps.find((p) => !FINISHED.includes(p.status));
 
 async function loadPreps() {
+  if (guest) return;
   preps = await api("/api/preps");
   renderPreps();
 }
@@ -1142,6 +1160,7 @@ $("clearGone").onclick = guard(async () => { await api("/api/robot/hits", { meth
 // Polled every 2 s. Filters come from the server only on first load; afterwards the local copy is
 // the one being edited, so only state, hits and settings are refreshed here.
 async function refreshRobot(first = false) {
+  if (guest) return;
   const r = await api("/api/robot");
   if (first) {
     HOURS = r.hours;
@@ -1507,6 +1526,7 @@ function renderOrders() {
 }
 
 async function loadOrders() {
+  if (guest) return;
   orders = await api("/api/orders");
   renderOrders(); // also when hidden: the tab's label counts the unpaid ones
 }
@@ -1693,9 +1713,65 @@ function followHash() {
 }
 window.addEventListener("hashchange", followHash);
 
+/* ---------- logging in: Discord (OAuth or /login), or a look around as a guest ---------- */
+function loginMessage(text) {
+  $("discordLoginMsg").textContent = text;
+  $("discordLoginMsg").style.color = "var(--err)";
+}
+
+// Back from Discord's authorize page (through the fixed address, which forwards ?query and #fragment):
+// #access_token=…&state=… on success, error=… (in either) when the person said no.
+async function finishOAuth() {
+  const frag = new URLSearchParams(location.hash.replace(/^#/, "")), query = new URLSearchParams(location.search);
+  const error = frag.get("error") || query.get("error");
+  const token = frag.get("access_token");
+  if (!token && !error) return;
+  history.replaceState(null, "", location.pathname); // keep the token out of the address bar and history
+  if (error) { loginMessage(error === "access_denied" ? "你在 Discord 取消了授權，沒有登入。" : `Discord 登入沒有成功（${error}）`); return; }
+  try { await api("/api/login/oauth", { method: "POST", body: JSON.stringify({ access_token: token, state: frag.get("state") }) }); }
+  catch (err) { loginMessage(err.message); }
+}
+
+async function loadLoginOptions() {
+  try {
+    const o = await api("/api/login/options");
+    $("oauthGo").hidden = !o.discord_oauth;
+  } catch (e) {}
+}
+$("oauthGo").onclick = guard(async () => {
+  $("oauthGo").disabled = true;
+  try { location.href = (await api("/api/login/discord/start", { method: "POST" })).url; }
+  finally { setTimeout(() => ($("oauthGo").disabled = false), 3000); }
+});
+$("guestGo").onclick = guard(startGuest);
+$("guestLogin").onclick = () => showLogin();
+
+async function startGuest() {
+  timers.forEach(clearInterval); timers = [];
+  guest = true;
+  me = { guest: true, can_book: false, display: "訪客", admin: false };
+  preps = [];
+  document.body.classList.add("guest");
+  $("acctPill").textContent = "訪客";
+  $("loginScreen").hidden = true;
+  $("app").hidden = false;
+  if (!venues.length) venues = await api("/api/venues");
+  await Promise.all([loadHistory(), loadSearch()]);
+  initHeatControls();
+  initSearchControls();
+  let tab = "search";
+  try { tab = localStorage.getItem("tab") || "search"; } catch (e) {}
+  showTab(["search", "heat"].includes(tab) ? tab : "search");
+  if (searchJob.running) pollSearch();
+  const quiet = (fn) => () => fn().catch(() => {});
+  timers = [setInterval(quiet(async () => { await loadSearch(); if (!$("panel-search").hidden) renderAvail(); }), 30000)];
+}
+
 /* ---------- init ---------- */
 let started = false;
 async function start() {
+  await finishOAuth();
+  loadLoginOptions();
   const m = location.hash.match(/^#login\/(.+)$/);
   if (m) {
     history.replaceState(null, "", location.pathname); // the code works once
