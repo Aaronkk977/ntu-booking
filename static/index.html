@@ -278,8 +278,11 @@
   /* phones */
   @media (max-width: 640px) {
     body { font-size: 15px; padding-bottom: calc(64px + env(safe-area-inset-bottom)); }
-    header { padding: 10px 12px; gap: 8px; }
-    header h1 { font-size: 16px; width: 100%; }
+    header { padding: 10px 12px; gap: 6px; flex-wrap: nowrap; }
+    header h1 { font-size: 16px; flex: 1; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    #acctPill { display: inline-block; max-width: 34vw; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+    #acctPill::before { display: inline-block; margin-right: 5px; vertical-align: 1px; }
+    #sessionPill { font-size: 0; gap: 0; padding: 7px; cursor: pointer; } /* just the coloured dot; tap for settings */
     header .spacer { display: none; }
     main { padding: 10px; gap: 12px; }
     section.card { padding: 12px; border-radius: 0; border-left: none; border-right: none; margin: 0 -10px; }
@@ -338,7 +341,7 @@
   <h1>臺大場地預約</h1>
   <span class="spacer"></span>
   <span id="acctPill" class="pill info"></span>
-  <span id="sessionPill" class="pill warn">學校網站未登入</span>
+  <span id="sessionPill" class="pill warn" data-open-settings>學校網站未登入</span>
   <button type="button" class="small" data-open-settings>設定</button>
   <button type="button" class="small primary guest-only" id="guestLogin">登入</button>
 </header>
