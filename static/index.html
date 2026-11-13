@@ -6,6 +6,9 @@
 <meta name="theme-color" content="#1f5fbf">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <title>臺大場地預約</title>
+<link rel="icon" href="/favicon-32.png" sizes="32x32">
+<link rel="icon" href="/icon-192.png" sizes="192x192">
+<link rel="apple-touch-icon" href="/apple-touch-icon.png">
 <style>
   :root {
     --bg: #f4f5f7;
@@ -104,6 +107,8 @@
   .toolbar .group { display: flex; gap: 6px; align-items: center; flex-wrap: wrap; }
   .toolbar .label { font-size: 12.5px; color: var(--muted); margin-right: 2px; }
   .chip { position: relative; }
+  .chip-group { display: inline-flex; align-items: center; gap: 4px; margin-right: 10px; flex-wrap: nowrap; }
+  .chip-sport { font-size: 12px; color: var(--muted); margin-right: 2px; }
   .chip input { position: absolute; opacity: 0; pointer-events: none; }
   .chip span { display: inline-block; padding: 4px 11px; border: 1px solid var(--line); border-radius: 999px; cursor: pointer; font-size: 13px; user-select: none; }
   .chip input:checked + span { background: var(--accent); border-color: var(--accent); color: #fff; }
@@ -279,7 +284,7 @@
     section.card { padding: 12px; border-radius: 0; border-left: none; border-right: none; margin: 0 -10px; }
     button { padding: 9px 14px; }
     button.small { padding: 7px 12px; font-size: 14px; }
-    .chip span { padding: 7px 13px; font-size: 14px; }
+    .chip span { padding: 5px 10px; font-size: 14px; }
     .tabs { position: fixed; left: 0; right: 0; bottom: 0; margin: 0; z-index: 6; background: var(--card);
       border-top: 1px solid var(--line); border-bottom: none; padding-bottom: env(safe-area-inset-bottom); }
     .tab { flex: 1; padding: 12px 2px; font-size: 13px; border-bottom: none; border-top: 3px solid transparent; }
@@ -349,7 +354,7 @@
 
     <div class="tabpanel" id="panel-search">
       <div class="toolbar">
-        <div class="group"><span class="label">場地（可複選）</span><span id="searchVenues" class="group"></span></div>
+        <div class="group"><span class="label">場地</span><span id="searchVenues" class="group"></span></div>
         <button type="button" class="small primary" id="searchBtn">搜尋</button>
         <button type="button" class="small" id="searchForce" title="不使用快取，重新向網站抓取">重新抓取</button>
         <span class="hint guest-only" style="margin:0">訪客看到的是大家最近一次搜尋的結果；登入後才能自己搜尋、設定通知。</span>
@@ -480,6 +485,7 @@
 <dialog class="modal" id="settings">
   <h2>設定 <button type="button" class="small ghost" id="closeSettings" aria-label="關閉">✕</button></h2>
   <p id="meLine" style="margin:0"></p>
+  <p class="hint" id="homeLine" hidden>想放到手機主畫面：打開 <a id="homeLink" target="_blank" rel="noopener">這個固定網址</a>，照著做「加入主畫面」。之後網址換了也能直接打開。</p>
   <h3 class="sub">計中帳號（讓伺服器幫你預訂）</h3>
   <p style="margin:0 0 6px" id="schoolState"></p>
   <p class="hint" id="meLoginError" style="color:var(--err)" hidden></p>
@@ -548,7 +554,16 @@ const pad = (n) => String(n).padStart(2, "0");
 const ymd = (d) => `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
 const parseDate = (s) => { const [y, m, d] = s.split("-").map(Number); return new Date(y, m - 1, d); };
 const fmtDate = (s) => { const d = parseDate(s); return `${d.getMonth() + 1}/${d.getDate()}（${WEEK[d.getDay()]}）`; };
-const venueName = (id) => { const v = venues.find((v) => v.id === id); return v ? `${v.name}（${v.sport}）` : id; };
+// Short names for the phone: 「羽球・多功能」, and just 「桌球室」 when the name already says the sport.
+const venueLabel = (v) => { const s = v.short || v.name; return s.includes(v.sport.slice(0, 1)) ? s : `${v.sport}・${s}`; };
+const venueName = (id) => { const v = venues.find((v) => v.id === id); return v ? venueLabel(v) : id; };
+// Venue checkboxes grouped by sport: 羽球 [多功能] [三樓]  桌球 [桌球室] [B109]  壁球 [壁球室]
+function venueChips(selected) {
+  const sports = [...new Set(venues.map((v) => v.sport))];
+  return sports.map((sport) => `<span class="chip-group"><span class="chip-sport">${sport}</span>${venues
+    .filter((v) => v.sport === sport).map((v) => `<label class="chip" title="${v.name}"><input type="checkbox" value="${v.id}"
+      ${selected.includes(v.id) ? "checked" : ""}><span>${v.short || v.name}</span></label>`).join("")}</span>`).join("");
+}
 const timeRange = (start, hours) => `${pad(start)}:00 – ${pad(start + hours)}:00`;
 
 function toast(msg, isErr = false) {
@@ -620,6 +635,8 @@ function renderMe() {
   $("discordTest").disabled = !me.discord_id || !me.discord_ready;
   $("discordState").innerHTML = me.discord_id ? '<span class="pill ok">已連結 Discord</span>' : '<span class="pill warn">還沒連結 Discord</span>';
   if (!me.discord_ready) $("discordHint").textContent = "伺服器還沒設定 Discord bot，請管理者執行 manage.py set-discord-token。";
+  $("homeLine").hidden = !me.home_url;
+  if (me.home_url) $("homeLink").href = me.home_url + "?add";
   $("adminBox").hidden = !me.admin;
   if (me.admin) {
     $("allowList").innerHTML = [...new Set([...me.admins, ...me.allowed])].map((a) => `<span class="tag">${escapeHtml(a)}${
@@ -834,9 +851,7 @@ function renderFilterEditor() {
   $("filterEmpty").hidden = has || robotData.filters.length > 0;
   if (!has) return;
   if (document.activeElement !== $("fName")) $("fName").value = watch.name;
-  $("watchVenues").innerHTML = venues.map((v) => `
-    <label class="chip"><input type="checkbox" value="${v.id}" ${watch.venues.includes(v.id) ? "checked" : ""}>
-      <span>${v.name}・${v.sport}</span></label>`).join("");
+  $("watchVenues").innerHTML = venueChips(watch.venues);
   $("watchEnabled").checked = watch.enabled;
   $("watchLabel").textContent = watch.enabled ? "啟用中" : "已停用";
   $("watchMode").value = (watch.mode === "auto" ? "auto" : "notify");
@@ -1204,7 +1219,7 @@ const ageText = (iso) => {
   const m = Math.floor((new Date() - new Date(iso)) / 60000);
   return m < 1 ? "剛剛" : m < 60 ? `${m} 分鐘前` : `${Math.floor(m / 60)} 小時前`;
 };
-const vShort = (id) => { const v = venues.find((v) => v.id === id); return v ? v.name : id; };
+const vShort = (id) => { const v = venues.find((v) => v.id === id); return v ? v.short || v.name : id; };
 
 // Venues whose results are on screen: ticked ones that have results, else any with results.
 function shownVenues() {
@@ -1236,9 +1251,7 @@ function availCell(day, h) {
 function saveSearchSel() { try { localStorage.setItem("searchSel", JSON.stringify(searchSel)); } catch (e) {} }
 
 function renderSearchVenues() {
-  $("searchVenues").innerHTML = venues.map((v) => `
-    <label class="chip"><input type="checkbox" value="${v.id}" ${searchSel.includes(v.id) ? "checked" : ""}>
-      <span>${v.name}・${v.sport}</span></label>`).join("");
+  $("searchVenues").innerHTML = venueChips(searchSel);
 }
 $("searchVenues").onchange = () => {
   searchSel = [...$("searchVenues").querySelectorAll("input:checked")].map((i) => i.value);
@@ -1683,7 +1696,7 @@ async function pollHistory() {
 }
 
 function initHeatControls() {
-  $("heatVenue").innerHTML = venues.map((v) => `<option value="${v.id}">${v.name}・${v.sport}</option>`).join("");
+  $("heatVenue").innerHTML = venues.map((v) => `<option value="${v.id}">${venueLabel(v)}</option>`).join("");
   const first = Object.keys(heatStats)[0] || watch.venues[0] || venues[0].id;
   $("heatVenue").value = first;
   const d = new Date(); d.setDate(d.getDate() - 56);

@@ -41,11 +41,12 @@ LOCAL_ORIGINS = {f"http://127.0.0.1:{PORT}", f"http://localhost:{PORT}"}
 
 # Venue IDs come from the "常租場地" links on rent.pe.ntu.edu.tw (/order/?Add=A:<id>).
 VENUES = [
-    {"id": "A:2", "name": "多功能球場", "sport": "羽球"},
-    {"id": "A:86", "name": "三樓主球場", "sport": "羽球"},
-    {"id": "A:4", "name": "桌球室", "sport": "桌球"},
-    {"id": "A:97", "name": "教室 B109", "sport": "桌球"},
-    {"id": "A:11", "name": "壁球室", "sport": "壁球"},
+    # "short" is what the phone page shows (grouped under the sport), "name" the school's own name
+    {"id": "A:2", "name": "多功能球場", "short": "多功能", "sport": "羽球"},
+    {"id": "A:86", "name": "三樓主球場", "short": "三樓", "sport": "羽球"},
+    {"id": "A:4", "name": "桌球室", "short": "桌球室", "sport": "桌球"},
+    {"id": "A:97", "name": "教室 B109", "short": "B109", "sport": "桌球"},
+    {"id": "A:11", "name": "壁球室", "short": "壁球室", "sport": "壁球"},
 ]
 VENUE_IDS = {v["id"] for v in VENUES}
 VENUE_IDS_ORDERED = [v["id"] for v in VENUES]
@@ -957,7 +958,7 @@ class Handler(BaseHTTPRequestHandler):
                 "discord_ready": bool(gcfg["discord_token"]), "school_login": acct.has_session(),
                 "login_error": acct.login_error, "has_password": credentials.load(acct.name) is not None,
                 "members": cfg.get("members", robot.DEFAULT_MEMBERS), "member_types": booker.MEMBER_TYPES,
-                "public_url": gcfg["public_url"],
+                "public_url": gcfg["public_url"], "home_url": oauth_redirect(),
                 **({"allowed": gcfg["allowed"], "admins": gcfg["admins"], "scan_account": config.scan_account(),
                     "discord_users": [{"account": n, "display": display_name(session.account(n))}
                                       for n in config.users() if config.is_discord_account(n)]} if admin else {}),

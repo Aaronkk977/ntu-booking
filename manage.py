@@ -20,6 +20,7 @@ import getpass
 import html
 import json
 import os
+import shutil
 import sys
 from pathlib import Path
 
@@ -114,22 +115,50 @@ REDIRECT_PAGE = r"""<!DOCTYPE html>
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <meta name="robots" content="noindex">
 <meta http-equiv="Cache-Control" content="no-cache">
+<meta name="theme-color" content="#1f5fbf">
 <title>臺大場地預約</title>
-<style>body{{font-family:system-ui,sans-serif;background:#111;color:#ddd;display:grid;place-items:center;min-height:90vh;margin:0}}a{{color:#8ab4ff}}</style>
+<link rel="icon" href="favicon-32.png" sizes="32x32">
+<link rel="icon" href="icon-192.png" sizes="192x192">
+<link rel="apple-touch-icon" href="apple-touch-icon.png">
+<style>body{{font-family:system-ui,sans-serif;background:#14171c;color:#e6e8ec;display:grid;place-items:center;min-height:90vh;margin:0;padding:0 20px;text-align:center}}
+a{{color:#6ea2ff}}img{{width:96px;height:96px;image-rendering:pixelated;border-radius:22px}}
+#add{{display:none}}.btn{{display:inline-block;margin-top:14px;padding:12px 22px;border-radius:9px;background:#1f5fbf;color:#fff;text-decoration:none;font-weight:600}}</style>
 <script>
 // The address in this page can be stale in the phone's cache, so ask for url.txt fresh first.
 (function () {{
   var fallback = {url_js};
-  function go(u) {{ location.replace(u.replace(/\/+$/, "") + "/" + location.search + location.hash); }}
-  fetch("url.txt?t=" + Date.now(), {{ cache: "no-store" }})
-    .then(function (r) {{ return r.ok ? r.text() : fallback; }})
-    .then(function (u) {{ u = u.trim(); go(/^https:\/\//.test(u) ? u : fallback); }})
-    .catch(function () {{ go(fallback); }});
+  function current(cb) {{
+    fetch("url.txt?t=" + Date.now(), {{ cache: "no-store" }})
+      .then(function (r) {{ return r.ok ? r.text() : fallback; }})
+      .then(function (u) {{ u = u.trim(); cb(/^https:\/\//.test(u) ? u : fallback); }})
+      .catch(function () {{ cb(fallback); }});
+  }}
+  // ?add: stay here so the phone can add THIS fixed address to the home screen (the tunnel's changes).
+  // The address bar drops ?add first, so the saved shortcut opens the plain page, which forwards.
+  if (/[?&]add\b/.test(location.search)) {{
+    history.replaceState(null, "", location.pathname);
+    document.addEventListener("DOMContentLoaded", function () {{
+      document.getElementById("go").style.display = "none";
+      document.getElementById("add").style.display = "block";
+      current(function (u) {{ document.getElementById("open").href = u + "/"; }});
+    }});
+    return;
+  }}
+  current(function (u) {{ location.replace(u.replace(/\/+$/, "") + "/" + location.search + location.hash); }});
 }})();
 </script>
 <noscript><meta http-equiv="refresh" content="0; url={url_attr}/"></noscript>
-</head><body><p>正在打開場地預約… 沒有自動跳轉的話請按 <a href="{url_attr}/">這裡</a>。</p></body></html>
+</head><body><div>
+<img src="icon-192.png" alt="">
+<p id="go">正在打開場地預約… 沒有自動跳轉的話請按 <a href="{url_attr}/">這裡</a>。</p>
+<div id="add"><h2 style="margin:12px 0 6px">加到主畫面</h2>
+<p>iPhone：按 Safari 下方的「分享」→「加入主畫面」。<br>Android：按 Chrome 右上角「⋮」→「加到主畫面」。</p>
+<p style="color:#9aa3af;font-size:14px">之後從主畫面打開，會自動跳到最新的網址。</p>
+<a class="btn" id="open" href="{url_attr}/">直接打開</a></div>
+</div></body></html>
 """
+
+ICONS = ("favicon-32.png", "icon-192.png", "icon-512.png", "apple-touch-icon.png")
 
 
 def _write_redirect(url: str) -> None:
@@ -141,7 +170,11 @@ def _write_redirect(url: str) -> None:
     page.parent.mkdir(parents=True, exist_ok=True)
     page.write_text(REDIRECT_PAGE.format(url_js=json.dumps(url), url_attr=html.escape(url)), encoding="utf-8")
     (page.parent / "url.txt").write_text(url + "\n", encoding="utf-8")
-    for f in (page, page.parent / "url.txt"):
+    here = Path(__file__).resolve().parent / "static"
+    for name in ICONS:  # the home-screen icon, when the fixed address is what gets added
+        if (here / name).exists():
+            shutil.copyfile(here / name, page.parent / name)
+    for f in [page, page.parent / "url.txt", *(page.parent / n for n in ICONS if (page.parent / n).exists())]:
         f.chmod(0o644)  # the department's web server reads it as another user
     page.parent.chmod(0o755)
     print(f"轉址頁已更新：{page} → {url}")
