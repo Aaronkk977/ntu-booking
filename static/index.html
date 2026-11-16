@@ -1674,6 +1674,8 @@ function maybeRefreshOrders() {
 }
 
 $("ordersRefresh").onclick = refreshOrders;
+// Coming back to the page (e.g. from the bank's payment page): check the orders if they're a few minutes old.
+document.addEventListener("visibilitychange", () => { if (!document.hidden && me && !guest) maybeRefreshOrders(); });
 
 /* ---------- history heatmap ---------- */
 const HEAT_BINS = [[0, 0.2], [0.2, 0.4], [0.4, 0.6], [0.6, 0.8], [0.8, 1.01]];
@@ -1927,6 +1929,7 @@ async function start() {
   showTab(tab);
   if (heatJob.running) pollHistory();
   await loadOrders(); // the server reads them in the background; this shows the latest it has
+  maybeRefreshOrders(); // and re-read them now if that is a few minutes old, whatever tab is open
   followHash();
   const quiet = (fn) => () => fn().catch(() => {});
   timers = [

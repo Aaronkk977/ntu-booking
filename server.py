@@ -186,6 +186,18 @@ def _add_fail(*keys: str) -> None:
 # ---------- orders (per person) ----------
 
 ORDERS_INTERVAL_S = 30 * 60
+ORDERS_UNPAID_S = 5 * 60  # while something is waiting to be paid, so a payment shows up soon
+ORDERS_PAYING_S = 2 * 60  # for a while after 線上付款 was opened
+PAYING_WINDOW_S = 30 * 60
+_paying_until: dict[str, float] = {}  # account -> time.monotonic() until which ORDERS_PAYING_S applies
+
+
+def _orders_interval(acct: session.Account, data: dict | None) -> int:
+    if _paying_until.get(acct.name, 0) > time.monotonic():
+        return ORDERS_PAYING_S
+    if data and any(o.get("kind") == "unpaid" for o in data.get("orders", [])):
+        return ORDERS_UNPAID_S
+    return ORDERS_INTERVAL_S
 _orders: dict[str, dict] = {}
 
 
@@ -305,7 +317,7 @@ def _orders_loop() -> None:
             acct = session.account(name)
             data = orders_state(acct)["data"]
             age = (datetime.now() - datetime.fromisoformat(data["fetched"])).total_seconds() if data else None
-            if acct.has_session() and (age is None or age >= ORDERS_INTERVAL_S):
+            if acct.has_session() and (age is None or age >= _orders_interval(acct, data)):
                 start_orders(acct)
         time.sleep(60)
 
@@ -1007,6 +1019,7 @@ class Handler(BaseHTTPRequestHandler):
             log("warn", f"線上付款沒有接到銀行：{_err(e)}", acct.name)
             return self._page("沒辦法直接打開付款頁", f"{_err(e)}。請到學校網站付款。", school_page)
         log("info", f"打開線上付款（訂單 {order_id}）", acct.name)
+        _paying_until[acct.name] = time.monotonic() + PAYING_WINDOW_S  # check the orders often for a while
         if "url" in hand:
             return self._send(302, b"", "text/plain", {"Location": hand["url"]})
         inputs = "".join(f'<input type="hidden" name="{htmllib.escape(n)}" value="{htmllib.escape(v)}">' for n, v in hand["fields"])
