@@ -8,6 +8,9 @@ not change the venue chosen in the server-side session, so it does not need the 
 import html as htmllib
 import json
 import re
+import urllib.error
+import urllib.parse
+import urllib.request
 from datetime import datetime
 import config
 import session
@@ -111,6 +114,82 @@ def cancel_order(acct: session.Account, order_id: str) -> tuple[bool | None, dic
     data = fetch_orders(acct)
     order = next((o for o in data["orders"] if o["id"] == order_id), None)
     return (order["kind"] == "cancelled" if order else None), data
+
+
+class _NoRedirect(urllib.request.HTTPRedirectHandler):
+    def redirect_request(self, *args, **kwargs):  # hand the 3xx back instead of following it
+        return None
+
+
+_FORM_RE = re.compile(r'<form[^>]*action="([^"]*)"[^>]*>(.*?)</form>', re.S | re.I)
+_INPUT_RE = re.compile(r'<input([^>]*)>', re.I)
+_ATTR_RE = re.compile(r'(\w+)\s*=\s*"([^"]*)"')
+
+
+def _fields(form_html: str) -> list[tuple[str, str]]:
+    """The values a browser would submit: hidden/text inputs, and the first radio of each name."""
+    out, radios = [], set()
+    for attrs in _INPUT_RE.findall(form_html):
+        a = {k.lower(): htmllib.unescape(v) for k, v in _ATTR_RE.findall(attrs)}
+        name, kind = a.get("name"), a.get("type", "text").lower()
+        if not name or kind in ("submit", "button", "image", "file"):
+            continue
+        if kind in ("radio", "checkbox"):
+            if name in radios:
+                continue
+            radios.add(name)
+        out.append((name, a.get("value", "")))
+    return out
+
+
+def start_payment(acct: session.Account, order_id: str) -> dict:
+    """Do what the site's 「線上付款」 → 信用卡 → 「付款」 does with the server's login, up to the moment the
+    site hands over to the bank, and return that hand-over for the person's own browser:
+    {"url": ...} for a redirect, or {"action", "method", "fields"} for a form to post. The bank's pages
+    need no login of the school site, so a phone can carry on from there.
+    Raises NotLoggedIn, or ValueError when the site answers something unexpected (saved to snapshots)."""
+    if not order_id.isdigit():
+        raise ValueError("bad order id")
+    page = acct.fetch(pay_path(order_id), referer=session.BASE + ORDERS_PATH)
+    session.SNAPSHOT_DIR.mkdir(parents=True, exist_ok=True)
+    (session.SNAPSHOT_DIR / f"_pay_{acct.name}.html").write_text(page, encoding="utf-8")
+    form = next(((a, f) for a, f in _FORM_RE.findall(page) if "GoPay" in a), None)
+    if not form:
+        raise ValueError("付款頁上找不到付款表單（可能已經繳費，或網站改版）")
+    action, body = form
+    fields = _fields(body) + [("PayGo", "OK")]
+    ua, cookies = acct.saved()
+    req = urllib.request.Request(
+        urllib.parse.urljoin(session.BASE + pay_path(order_id), htmllib.unescape(action)),
+        data=urllib.parse.urlencode(fields).encode(), method="POST", headers={
+            "User-Agent": ua, "Cookie": "; ".join(f"{c['name']}={c['value']}" for c in cookies),
+            "Content-Type": "application/x-www-form-urlencoded", "Referer": session.BASE + pay_path(order_id)})
+    # Not following redirects here: urllib would carry the school site's Cookie header to the bank.
+    opener = urllib.request.build_opener(_NoRedirect, urllib.request.HTTPSHandler(context=session._SSL_CONTEXT))
+    try:
+        with opener.open(req, timeout=20) as res:
+            status, location, html = res.status, res.headers.get("Location"), res.read().decode("utf-8", errors="replace")
+    except urllib.error.HTTPError as e:  # a 3xx comes back as an "error" when not followed
+        status, location, html = e.code, e.headers.get("Location"), e.read().decode("utf-8", errors="replace")
+    (session.SNAPSHOT_DIR / f"_gopay_{acct.name}.html").write_text(
+        f"<!-- HTTP {status} Location: {location} -->\n{html}", encoding="utf-8")
+    if location:
+        url = urllib.parse.urljoin(session.BASE + "/member/GoPay.php", location)
+        if urllib.parse.urlparse(url).hostname != urllib.parse.urlparse(session.BASE).hostname:
+            return {"url": url}
+        raise ValueError(f"付款時學校網站轉到 {location}，不是銀行的付款頁")
+    if session.is_logged_out_page(html):
+        acct.clear()
+        raise session.NotLoggedIn("學校網站的登入已過期")
+    for action, body in _FORM_RE.findall(html):  # an auto-submitting form to the bank
+        target = urllib.parse.urljoin(session.BASE + "/member/GoPay.php", htmllib.unescape(action))
+        if urllib.parse.urlparse(target).hostname != urllib.parse.urlparse(session.BASE).hostname:
+            method = "get" if re.search(r'method\s*=\s*"get"', body + action, re.I) else "post"
+            return {"action": target, "method": method, "fields": _fields(body)}
+    m = re.search(r'(?:location(?:\.href)?\s*=|url=)\s*["\']?(https?://[^"\'\s;>]+)', html, re.I)
+    if m and urllib.parse.urlparse(m.group(1)).hostname != urllib.parse.urlparse(session.BASE).hostname:
+        return {"url": htmllib.unescape(m.group(1))}
+    raise ValueError(f"學校網站沒有轉到銀行的付款頁（HTTP {status}，頁面已存到 data/snapshots/）")
 
 
 def pay_path(order_id: str) -> str:

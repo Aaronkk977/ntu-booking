@@ -10,6 +10,7 @@ so the server can log in again on its own when the school's login expires.
 Run:  python server.py        (PORT, PUBLIC_URL and NTU_BOOKING_DATA can be set in the environment)
 """
 import hashlib
+import html as htmllib
 import json
 import os
 import secrets
@@ -247,7 +248,7 @@ def _deadline_reminders(acct: session.Account, data: dict) -> None:
             continue
         buttons = []
         if o.get("can_pay", True):
-            buttons.append(notify.link_button("線上付款", session.BASE + orders.pay_path(o["id"])))
+            buttons.append(notify.link_button("線上付款", pay_url(acct, o["id"])))
         if o.get("can_cancel", True):
             buttons.append(notify.button("取消訂單", f"order:cancel:{o['id']}", 4))
         notify.send(_discord_id(acct), f"⏰ {when}是繳費期限：{order_label(o)}，金額 {o['amount']}\n"
@@ -326,7 +327,7 @@ def _on_prep_change(prep: booker.Prep) -> None:
             orders_state(acct).update(data=saved, error=None)
         buttons = []
         for oid in prep.order_ids[-2:]:
-            buttons += [notify.link_button("線上付款", session.BASE + orders.pay_path(oid)),
+            buttons += [notify.link_button("線上付款", pay_url(acct, oid)),
                         notify.button("取消訂單", f"order:cancel:{oid}", 4)]
         head = "🤖 自動訂到了" if prep.auto and not prep.by_tap else "✅"
         notify.send(did, f"{head} {prep.label}\n{prep.message}", ("打開訂單", notify.url("#orders")), buttons=buttons)
@@ -430,9 +431,35 @@ def _on_new_hits(acct: session.Account, found: list[tuple[dict, list[dict]]]) ->
                 buttons=book_buttons[:room] + school)
 
 
+def diagnose_network() -> str:
+    """When the school site can't be reached: is it this machine's network, the name lookup, or the site?
+    Tries DNS for the site, a TCP connection to it, and a TCP connection to an outside site."""
+    import socket
+
+    def connect(host: str, port: int = 443) -> str:
+        try:
+            with socket.create_connection((host, port), timeout=6):
+                return "可連"
+        except OSError as e:
+            return f"連不上（{e.strerror or e.__class__.__name__}）"
+
+    site = urlparse(session.BASE).hostname
+    try:
+        ip = socket.gethostbyname(site)
+    except OSError as e:
+        return f"查不到 {site} 的位址（DNS：{e}）；外部網站 discord.com {connect('discord.com')}"
+    to_site, outside = connect(site), connect("discord.com")
+    verdict = ("學校網站那端的問題" if outside == "可連" and to_site != "可連"
+               else "工作站的網路斷了" if outside != "可連" and to_site != "可連" else "現在都連得上，可能已恢復")
+    return f"{site}（{ip}）{to_site}；discord.com {outside} → {verdict}"
+
+
 def _on_robot_error(msg: str) -> None:
-    if any(w in msg for w in ("No route to host", "timed out", "Name or service not known", "Connection refused")):
-        msg = f"連不到學校網站（{msg}），恢復後會再通知你"
+    if any(w in msg for w in ("No route to host", "timed out", "Name or service not known", "Connection refused",
+                               "Network is unreachable", "urlopen error")):
+        check = diagnose_network()
+        log("warn", f"網路診斷：{check}")
+        msg = f"連不到學校網站（{msg}）\n診斷：{check}\n恢復後會再通知你"
     for name in config.load()["admins"]:
         notify.send(_discord_id(session.account(name)), f"🤖 機器人掃描失敗：{msg}")
 
@@ -453,6 +480,18 @@ _link_codes: dict[str, tuple[str, float]] = {}  # one-time code from /link -> (d
 _login_codes: dict[str, tuple[str, str, float]] = {}  # from /login -> (discord user id, name, expiry)
 _oauth_states: dict[str, tuple[str, float]] = {}  # 「用 Discord 登入」 -> ("", expiry), used once
 GUEST_PATHS = ("/api/venues", "/api/history", "/api/search")
+
+
+def pay_signature(account: str, order_id: str) -> str:
+    return credentials.sign(f"pay:{account}:{order_id}")
+
+
+def pay_url(acct: session.Account, order_id: str) -> str:
+    """「線上付款」 for a Discord message: our /pay page, signed so it works without logging in to the web app."""
+    if not config.load()["public_url"]:
+        return session.BASE + orders.pay_path(order_id)
+    q = urllib.parse.urlencode({"a": acct.name, "s": pay_signature(acct.name, order_id)})
+    return notify.url(f"pay/{order_id}?{q}")
 
 
 def oauth_redirect() -> str:
@@ -820,6 +859,8 @@ class Handler(BaseHTTPRequestHandler):
             return self._error(403)
         try:
             body = self._parse(raw)
+            if method == "GET" and path.startswith("/pay/"):
+                return self._pay(path.split("/")[2] if path.count("/") >= 2 else "")
             if not path.startswith("/api/"):
                 return self._static(path) if method == "GET" else self._error(404)
             if (method, path) == ("POST", "/api/login"):
@@ -944,6 +985,45 @@ class Handler(BaseHTTPRequestHandler):
             return self._error(403, "只有在預約系統的 Discord 伺服器裡的人才能登入，請先請管理者邀你加入")
         return self._web_login_discord(discord_id, uname)
 
+    def _pay(self, order_id: str):
+        """「線上付款」: start the payment with the server's school login and send the browser on to the bank.
+        Works from the web app (logged in) or a Discord link (?a=<account>&s=<signature> for that order)."""
+        query = dict(urllib.parse.parse_qsl(urlparse(self.path).query))
+        acct = self._account()
+        signed = query.get("a") and secrets.compare_digest(query.get("s", ""), pay_signature(query["a"], order_id))
+        if signed:
+            acct = session.account(query["a"])
+        school_page = session.BASE + orders.pay_path(order_id) if order_id.isdigit() else session.BASE + orders.ORDERS_PATH
+        if acct is None or not order_id.isdigit():
+            return self._send(302, b"", "text/plain", {"Location": school_page})
+        known = {o["id"] for o in ((orders_state(acct)["data"] or orders.load_saved(acct) or {}).get("orders") or [])}
+        if order_id not in known:
+            return self._page("找不到這筆訂單", "只能付自己的訂單。", school_page)
+        if not can_book(acct):
+            return self._send(302, b"", "text/plain", {"Location": school_page})
+        try:
+            hand = acct.with_relogin(lambda: orders.start_payment(acct, order_id))
+        except Exception as e:
+            log("warn", f"線上付款沒有接到銀行：{_err(e)}", acct.name)
+            return self._page("沒辦法直接打開付款頁", f"{_err(e)}。請到學校網站付款。", school_page)
+        log("info", f"打開線上付款（訂單 {order_id}）", acct.name)
+        if "url" in hand:
+            return self._send(302, b"", "text/plain", {"Location": hand["url"]})
+        inputs = "".join(f'<input type="hidden" name="{htmllib.escape(n)}" value="{htmllib.escape(v)}">' for n, v in hand["fields"])
+        body = (f'<!doctype html><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">'
+                f'<title>前往付款…</title><body style="font-family:system-ui;text-align:center;padding:40px">'
+                f'<form id="f" method="{hand["method"]}" action="{htmllib.escape(hand["action"])}">{inputs}'
+                f'<p>正在前往銀行付款頁…</p><button>沒有自動跳轉就按這裡</button></form>'
+                f'<script>document.getElementById("f").submit()</script>')
+        return self._send(200, body.encode(), "text/html; charset=utf-8", {"Cache-Control": "no-store"})
+
+    def _page(self, title: str, text: str, link: str):
+        body = (f'<!doctype html><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">'
+                f'<title>{htmllib.escape(title)}</title><body style="font-family:system-ui;padding:32px;line-height:1.6">'
+                f'<h3>{htmllib.escape(title)}</h3><p>{htmllib.escape(text)}</p>'
+                f'<p><a href="{htmllib.escape(link)}">到學校網站</a></p>')
+        return self._send(200, body.encode(), "text/html; charset=utf-8", {"Cache-Control": "no-store"})
+
     def _guest_get(self, path: str):
         """Not logged in: the shared search results and the heat map, read only."""
         if path == "/api/venues":
@@ -1014,7 +1094,7 @@ class Handler(BaseHTTPRequestHandler):
             st = orders_state(acct)
             data = st["data"]
             if data:
-                data = {**data, "orders": [{**o, "pay_url": session.BASE + orders.pay_path(o["id"]),
+                data = {**data, "orders": [{**o, "pay_url": f"/pay/{o['id']}",
                                             "detail_url": session.BASE + orders.detail_path(o["id"])} for o in data["orders"]]}
             return self._json({**st, "data": data})
         if path == "/api/search":

@@ -17,10 +17,11 @@ import config
 
 KEY_FILE = config.DATA / "secret.key"
 _fernet: Fernet | None = None
+_raw_key: bytes = b""
 
 
 def _key() -> Fernet:
-    global _fernet
+    global _fernet, _raw_key
     if _fernet is None:
         key = os.environ.get("NTU_BOOKING_KEY", "").encode()
         if not key:
@@ -31,7 +32,17 @@ def _key() -> Fernet:
                     os.chmod(KEY_FILE, 0o600)
             key = KEY_FILE.read_bytes().strip()
         _fernet = Fernet(key)
+        _raw_key = key
     return _fernet
+
+
+def sign(text: str) -> str:
+    """A short HMAC of `text` with the server's secret, for links that must work without a web login
+    (e.g. 「線上付款」 in a Discord DM): only the server can make one, and it fits one order of one person."""
+    import hashlib
+    import hmac
+    _key()
+    return hmac.new(b"link:" + _raw_key, text.encode(), hashlib.sha256).hexdigest()[:24]
 
 
 def _file(account: str):
