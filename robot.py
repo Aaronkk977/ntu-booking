@@ -179,11 +179,13 @@ def _active_by_user() -> dict[str, list[dict]]:
 
 class Robot:
     def __init__(self, log, venue_names: dict[str, str], venue_order: list[str], on_result, on_new_hits,
-                 on_error=lambda msg: None):
+                 on_error=lambda msg: None, on_recover=lambda since: None):
         self.log, self.venue_names, self.venue_order = log, venue_names, venue_order
         self.on_result = on_result  # (venue, result) after each venue of a round
         self.on_new_hits = on_new_hits  # (account, [(hit, [filter])]) after a round
         self.on_error = on_error  # (message) when a round fails, for the admins
+        self.on_recover = on_recover  # (time of the first failure) when a round works again after on_error
+        self._failing_since = None
         self.lock = threading.Lock()
         self.state = {"running": False, "last_scan": None, "next_scan": None, "error": None,
                       "venue": None, "done": 0, "total": 0}
@@ -284,11 +286,14 @@ class Robot:
                 self.on_new_hits(acct, [(h, [names[fid] for fid in h["filters"] if fid in names]) for h in added])
         if error:
             self._failures += 1
+            self._failing_since = self._failing_since or datetime.now()
             self.log("error", f"機器人掃描失敗：{error}")
             if self._failures in (1, 5):  # tell the admins once, and again if it keeps failing
                 self.on_error(error)
         else:
-            self._failures = 0
+            if self._failures:  # the admins heard about the first failure, so tell them it's over
+                self.on_recover(self._failing_since)
+            self._failures, self._failing_since = 0, None
             if preempted:
                 self.log("info", "機器人掃描先暫停讓預訂使用網站，1 分鐘後重新掃描")
             else:

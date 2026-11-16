@@ -65,14 +65,14 @@ _logs: list[dict] = []
 
 
 def log(level: str, msg: str, account: str | None = None) -> None:
-    with _lock:
-        _logs.append({"time": datetime.now().strftime("%Y-%m-%d %H:%M:%S"), "level": level, "msg": msg,
-                      "account": account})
+    now = datetime.now()
+    with _lock:  # printing inside the lock too, so lines from different threads don't run into each other
+        _logs.append({"time": now.strftime("%Y-%m-%d %H:%M:%S"), "level": level, "msg": msg, "account": account})
         del _logs[:-1000]
-    try:  # the console may not take every character (cp950 on a Windows console); logging must never throw
-        print(f"[{level}] {account or '-'}: {msg}", flush=True)
-    except (UnicodeError, OSError):
-        pass
+        try:  # the console may not take every character (cp950 on a Windows console); logging must never throw
+            print(f"{now:%m-%d %H:%M:%S} [{level}] {account or '-'}: {msg}", flush=True)
+        except (UnicodeError, OSError):
+            pass
 
 
 def _err(e: Exception) -> str:
@@ -431,8 +431,19 @@ def _on_new_hits(acct: session.Account, found: list[tuple[dict, list[dict]]]) ->
 
 
 def _on_robot_error(msg: str) -> None:
+    if any(w in msg for w in ("No route to host", "timed out", "Name or service not known", "Connection refused")):
+        msg = f"連不到學校網站（{msg}），恢復後會再通知你"
     for name in config.load()["admins"]:
         notify.send(_discord_id(session.account(name)), f"🤖 機器人掃描失敗：{msg}")
+
+
+def _on_robot_recover(since: datetime) -> None:
+    """Scans work again after the admins were told they failed."""
+    minutes = max(1, round((datetime.now() - since).total_seconds() / 60))
+    span = f"{minutes} 分鐘" if minutes < 120 else f"{round(minutes / 60)} 小時"
+    log("info", f"機器人掃描恢復正常（中斷約 {span}）")
+    for name in config.load()["admins"]:
+        notify.send(_discord_id(session.account(name)), f"✅ 機器人掃描恢復正常（中斷約 {span}）")
 
 
 # ---------- Discord interactions (/link, /unlink, the Confirm / Cancel buttons) ----------
@@ -635,7 +646,8 @@ _search_results: dict[str, dict] = {}  # latest per-venue result, from a manual 
 _history_job = {"running": False, "venue": None, "done": 0, "total": 0}
 
 ROBOT = robot.Robot(log, VENUE_NAMES, VENUE_IDS_ORDERED, on_result=_search_results.__setitem__,
-                    on_new_hits=_on_new_hits, on_error=_on_robot_error)
+                    on_new_hits=_on_new_hits, on_error=_on_robot_error,
+                    on_recover=_on_robot_recover)
 
 
 def _sync_search_from_cache() -> None:
