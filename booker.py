@@ -29,6 +29,11 @@ SKIP_HOSTS = {"www.googletagmanager.com", "www.google-analytics.com", "ssllogo.t
 # Words on the confirmation page's buttons that must never be pressed as the final one.
 NOT_FINAL = ("取消", "返回", "上一步", "修改", "重新", "回上")
 FINAL_WORDS = ("確認", "送出", "完成", "租借")
+# The confirmation page gets an invisible reCAPTCHA v3 token from Google after it loads; sent without one,
+# the order goes back to step 1. Tokens expire after 2 minutes.
+TOKEN_WAIT_S = 15
+TOKEN_FRESH_S = 90
+_TOKEN_INPUTS = 'form#RentForm input[name="RecaptchaToken"]'
 
 
 class SlotGone(Exception):
@@ -136,6 +141,27 @@ def _final_button(page):
     return found[0] if len(found) == 1 else None
 
 
+def _wait_token(page, shown_at: float) -> bool:
+    """Wait until the confirmation page's own script has put Google's token in RecaptchaToken. When the page
+    has been open long enough for it to expire, ask for a new one the way the page does on load. True when
+    there is a token, or the page has no such field."""
+    if page.locator(_TOKEN_INPUTS).count() == 0:
+        return True
+    if time.monotonic() - shown_at > TOKEN_FRESH_S:
+        page.evaluate("""sel => {
+            const inputs = document.querySelectorAll(sel);
+            inputs.forEach(i => { i.value = ""; });
+            grecaptcha.ready(() => grecaptcha.execute(RecaptchaClass.RecaptchaSiteKey,
+                {action: RecaptchaClass.ActionValue}).then(t => inputs.forEach(i => { i.value = t; })));
+        }""", _TOKEN_INPUTS)
+    try:
+        page.wait_for_function("sel => [...document.querySelectorAll(sel)].every(i => i.value)", arg=_TOKEN_INPUTS,
+                               timeout=TOKEN_WAIT_S * 1000)
+        return True
+    except Exception:
+        return False
+
+
 def _booked(acct: session.Account, day: str, hour: int, before: set[str]) -> str | None:
     """The id of a new, not cancelled order for this slot in the order list, or None."""
     data = orders.fetch_orders(acct)
@@ -162,6 +188,7 @@ class Prep:
         self.court = None
         self.amount = ""
         self.screenshot: bytes | None = None
+        self.shown_at = 0.0  # time.monotonic() when the confirmation page loaded
         self.expires_at: datetime | None = None
         self.booked: list[str] = []
         self.step = 1
@@ -328,6 +355,7 @@ def _book(prep: Prep, set_) -> None:
                     return
                 prep.court, prep.amount = found
                 page.wait_for_load_state("load", timeout=10000)
+                prep.shown_at = time.monotonic()
                 _save_page(page, f"_confirm_{acct.name}", "the school's confirmation page")
                 prep.screenshot = page.screenshot(full_page=True, type="jpeg", quality=70)
                 cost = f"，金額 ${prep.amount}" if prep.amount else ""
@@ -365,8 +393,12 @@ def _confirm(page, prep: Prep) -> None:
         _save_page(page, f"_confirm_nobutton_{acct.name}", "no single final button found")
         raise Stuck("確認頁上找不到唯一的送出鈕（網站可能改版，頁面已存到 data/snapshots/）")
     el, _text = button
+    if not _wait_token(page, prep.shown_at):
+        _save_page(page, f"_confirm_notoken_{acct.name}", "no reCAPTCHA token")
+        raise Stuck(f"確認頁等了 {TOKEN_WAIT_S} 秒還沒拿到 Google 的 reCAPTCHA 驗證，沒有送出")
     # Playwright dismisses dialogs by default, which would answer "cancel" to a 「確定要送出嗎？」 prompt.
-    page.on("dialog", lambda d: d.accept())
+    said = []
+    page.on("dialog", lambda d: (said.append(d.message.strip()), d.accept()))
     try:
         with page.expect_navigation(wait_until="domcontentloaded", timeout=20000):
             el.evaluate("b => b.click()")
@@ -376,5 +408,9 @@ def _confirm(page, prep: Prep) -> None:
     time.sleep(1)
     order_id = _booked(acct, prep.day, prep.hour, before)
     if not order_id:
+        if said:
+            raise Stuck(f"學校網站回覆：{said[-1]}")
+        if page.locator("textarea#RentSchedule").count():  # back on step 1's form
+            raise Stuck("學校網站把這次送出退回第 1 步，沒有訂到")
         raise Stuck("按了送出，但訂單列表裡找不到這筆，請到學校網站確認")
     prep.order_ids.append(order_id)

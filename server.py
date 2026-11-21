@@ -352,7 +352,7 @@ def _on_prep_change(prep: booker.Prep) -> None:
         _record_auto(prep)
         notify.send(did, f"⚠️ {prep.label}\n{prep.message}")
         if prep.status == "failed" and "沒有可訂" in prep.message:
-            robot.mark_gone(acct, prep.venue, prep.day, prep.hour)
+            robot.drop_hit(acct, prep.venue, prep.day, prep.hour)
         if prep.booked:
             start_orders(acct)
 
@@ -1374,9 +1374,6 @@ class Handler(BaseHTTPRequestHandler):
             cfg["filters"] = keep
             robot.save_config(acct, cfg)
             ROBOT.reschedule()
-            return self._json({"ok": True})
-        if path == "/api/robot/hits":
-            robot.save_hits(acct, {k: h for k, h in robot.load_hits(acct).items() if h["status"] != "gone"})
             return self._json({"ok": True})
         if path == "/api/me":
             # Forget everything about this person: stored password, school login, filters, hits, orders.

@@ -4,8 +4,8 @@ Each person has filters: a named combination of venues plus a weekly template (w
 Every few minutes one shared round walks the union of the venues of everybody's enabled filters, through
 the scan account's login and the same scanner.search() + cache as the 可租時段搜尋 tab. Then each
 person's online-bookable slots that match one of their filters go onto their own hit list
-(data/users/<account>/hits.json). Hits that are no longer open are marked "gone"; hits whose date has
-passed are dropped. New hits go to `on_new_hits`, which notifies and may prepare a booking.
+(data/users/<account>/hits.json). Hits that are no longer open, or whose date has passed, are dropped; one
+that opens again later is a new hit. New hits go to `on_new_hits`, which notifies and may prepare a booking.
 
 One walk for everybody keeps the load on the school's site the same however many people use it.
 """
@@ -127,7 +127,7 @@ def update_hits(acct: session.Account, filters: list[dict], results: dict[str, d
                         key = f"{venue}|{day}|{h}"
                         matched.setdefault(key, (cell, []))[1].append(f["id"])
 
-    hits = load_hits(acct)
+    hits = {k: h for k, h in load_hits(acct).items() if h["status"] != "gone"}  # older versions kept sold-out ones
     now = datetime.now().isoformat(timespec="seconds")
     added = []
     for key, (cell, fids) in matched.items():
@@ -137,9 +137,6 @@ def update_hits(acct: session.Account, filters: list[dict], results: dict[str, d
             hit = hits[key] = {"id": _new_id(), "venue": venue, "date": day, "hour": int(h),
                                "first_seen": now, "status": "available", "want": 1}
             added.append(hit)
-        elif hit["status"] == "gone":
-            hit["status"] = "available"
-            added.append(hit)  # open again: worth telling
         hit.update(count=cell["open"], last_seen=now, filters=sorted(set(fids)))
         hit["want"] = clamp_want(hit.get("want"), hit["count"])
 
@@ -150,19 +147,14 @@ def update_hits(acct: session.Account, filters: list[dict], results: dict[str, d
         if hit["date"] < today or not hit["filters"]:
             del hits[key]
         elif key not in matched and hit["venue"] in results:
-            if hit["status"] == "dismissed":
-                del hits[key]  # it went away, so a later reopening counts as new again
-            elif hit["status"] == "available":
-                hit.update(status="gone", gone_at=now)
+            del hits[key]  # sold out (or a dismissed one went away): a later reopening counts as new
     save_hits(acct, hits)
     return added
 
 
-def mark_gone(acct: session.Account, venue: str, day: str, hour: int) -> None:
+def drop_hit(acct: session.Account, venue: str, day: str, hour: int) -> None:
     hits = load_hits(acct)
-    hit = hits.get(f"{venue}|{day}|{hour}")
-    if hit:
-        hit.update(status="gone", gone_at=datetime.now().isoformat(timespec="seconds"))
+    if hits.pop(f"{venue}|{day}|{hour}", None):
         save_hits(acct, hits)
 
 

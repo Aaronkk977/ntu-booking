@@ -220,7 +220,6 @@
   .hits { display: grid; gap: 6px; }
   .hit { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 12px; padding: 8px 10px 8px 12px; border: 1px solid var(--line); border-radius: 8px; font-size: 13px; }
   .hit.available { border-color: var(--ok); background: var(--ok-soft); }
-  .hit.gone { opacity: .65; }
   .hit .tag { font-size: 12px; padding: 1px 8px; border-radius: 999px; background: var(--bg); color: var(--muted); }
   .hit .when { color: var(--muted); font-size: 12px; margin-left: auto; }
   .hit .acts { display: inline-flex; align-items: center; gap: 8px; white-space: nowrap; }
@@ -408,8 +407,7 @@
       </span>
     </div>
 
-    <h3 class="sub">找到的空位 <span class="count" id="hitCount"></span>
-      <button type="button" class="small ghost right" id="clearGone">清除已失效</button></h3>
+    <h3 class="sub">找到的空位 <span class="count" id="hitCount"></span></h3>
     <p class="hint members-line" id="membersLine"></p>
     <div class="hits" id="hits"></div>
     <details class="fold" id="dismissedFold" hidden><summary id="dismissedSummary"></summary>
@@ -918,27 +916,23 @@ function renderRobotState() {
 
 function renderHits() {
   const hits = robotData.hits;
-  const avail = hits.filter((h) => h.status === "available");
-  $("hitCount").textContent = hits.length ? `可訂 ${avail.length} 筆${hits.length > avail.length ? `・已失效 ${hits.length - avail.length} 筆` : ""}` : "";
-  $("clearGone").hidden = hits.length === avail.length;
-  document.title = avail.length ? `(${avail.length}) 有空位！臺大場地預約` : "臺大場地預約";
+  $("hitCount").textContent = hits.length ? `可訂 ${hits.length} 筆` : "";
+  document.title = hits.length ? `(${hits.length}) 有空位！臺大場地預約` : "臺大場地預約";
   // Don't rebuild the rows while a quantity box is being edited (the 2 s poll would steal focus).
   if (document.activeElement && document.activeElement.matches("#hits input[data-want]")) return;
-  const sorted = [...avail, ...hits.filter((h) => h.status !== "available")];
   const busy = !!activePrep();
-  $("hits").innerHTML = sorted.length ? sorted.map((h) => `
-    <div class="hit ${h.status}" id="hit-${h.id}">
-      ${h.status === "available" ? "" : '<span class="pill warn">售罄</span>'}
+  $("hits").innerHTML = hits.length ? hits.map((h) => `
+    <div class="hit available" id="hit-${h.id}">
       <b>${fmtDate(h.date)} ${timeRange(h.hour, 1)}</b>
-      <span>${venueName(h.venue)}${h.status === "available" ? `・線上 ${h.count} 面` : ""}</span>
+      <span>${venueName(h.venue)}・線上 ${h.count} 面</span>
       ${(h.filters || []).map((fid) => `<span class="tag">${escapeHtml(filterName(fid))}</span>`).join("")}
-      <span class="when">${h.status === "available" ? `${ageText(h.first_seen)}發現` : `${ageText(h.gone_at)}失效`}</span>
+      <span class="when">${ageText(h.first_seen)}發現</span>
       <span class="acts">
-      ${h.status === "available" ? `<label class="want">
+      <label class="want">
         <input type="number" min="1" max="${h.count}" value="${Math.min(h.want || 1, h.count)}" data-want="${h.id}" ${busy ? "disabled" : ""}>
         面</label>
         ${me && me.can_book ? `<button type="button" class="small primary" data-book="${h.id}" ${busy ? "disabled" : ""}>預訂</button>`
-          : `<a class="small btnlink primary" href="${schoolUrl(h.venue)}" target="_blank" rel="noopener">到學校網站訂</a>`}` : ""}
+          : `<a class="small btnlink primary" href="${schoolUrl(h.venue)}" target="_blank" rel="noopener">到學校網站訂</a>`}
       <button type="button" class="small ghost" data-dismiss="${h.id}" title="從清單移除">✕</button>
       </span>
     </div>`).join("") : '<div class="empty">還沒有</div>';
@@ -1275,7 +1269,6 @@ $("prepBox").addEventListener("click", guard(async (e) => {
   await loadPreps();
 }));
 
-$("clearGone").onclick = guard(async () => { await api("/api/robot/hits", { method: "DELETE" }); refreshRobot(); });
 
 
 // Polled every 2 s. Filters come from the server only on first load; afterwards the local copy is
